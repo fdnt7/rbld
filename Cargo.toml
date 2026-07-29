@@ -4,3 +4,22 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anstream = "1.0.0"
+anstyle = "1.0.14"
+anyhow = "1.0.104"
+clap = { version = "4.6.4", features = ["derive", "string"] }
+git2 = "0.21.0"
+hostname = "0.4.2"
+serde = { version = "1.0.229", features = ["derive"] }
+termtree = "1.0.0"
+toml = "1.1.3"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+enum_glob_use = "deny"
+unwrap_used = "deny"
+try_err = "deny"
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }

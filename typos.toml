@@ -2,5 +2,13 @@
 extend-ignore-re = [
   # Ignore "analyzer"
   "rust-analyzer",
+  # Ignore "color"
+  "anstyle::Color",
+]
+extend-ignore-identifiers-re = [
+  # Ignore "color"
+  "Ansi256Color",
+  "AnsiColor",
+  "bg_color",
 ]
 locale = "en-gb"
