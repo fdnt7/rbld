@@ -52,5 +52,20 @@
             };
         }
       );
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          cargoToml = nixpkgs.lib.importTOML ./Cargo.toml;
+        in
+        {
+          default = pkgs.rustPlatform.buildRustPackage {
+            inherit (cargoToml.package) version;
+            pname = cargoToml.package.name;
+            src = self;
+            cargoLock.lockFile = ./Cargo.lock;
+          };
+        }
+      );
     };
 }
