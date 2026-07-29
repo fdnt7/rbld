@@ -21,6 +21,10 @@
       checks = forAllSystems (system: {
         formatting = treefmtEval.${system}.config.build.check self;
       });
+      homeModules = rec {
+        rbld = import ./home-manager.nix self;
+        default = rbld;
+      };
       devShells = forAllSystems (
         system:
         let
