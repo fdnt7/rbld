@@ -116,6 +116,18 @@ impl crate::cli::Cli {
             .collect::<Vec<_>>()
             .join("\n");
 
+        // a commit is rebuilt once per machine, each on its own schedule, so
+        // the host it was rebuilt on is both what tells the notes apart and
+        // what the note names as the scope of what it changed
+        //
+        // both are settled ahead of the commit rather than after it: a
+        // signature git cannot put together, or a host that will not name
+        // itself, would otherwise stop us with the lock file already committed
+        // and nothing yet built from it
+        let signature = repo.signature()?;
+        let system = hostname::get()?.to_string_lossy().into_owned();
+        let notes_ref = format!("{REBUILD_NOTES_REF_PREFIX}/{system}");
+
         step("committing the lock file");
 
         let commit_status = Command::new("git")
@@ -134,13 +146,6 @@ impl crate::cli::Cli {
 
         let commit = repo.head()?.peel_to_commit()?;
         let head = commit.id();
-        let signature = repo.signature()?;
-
-        // a commit is rebuilt once per machine, each on its own schedule, so
-        // the host it was rebuilt on is both what tells the notes apart and
-        // what the note names as the scope of what it changed
-        let system = hostname::get()?.to_string_lossy().into_owned();
-        let notes_ref = format!("{REBUILD_NOTES_REF_PREFIX}/{system}");
 
         // said ahead of the terminal being handed over rather than after,
         // while there is still something on this end to return the carriage
