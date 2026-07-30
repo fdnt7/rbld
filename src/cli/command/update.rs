@@ -8,7 +8,9 @@ use {
     crate::util::{
         git,
         render::{DISALLOWED, HEADLINE, file_path, paint, rooted},
-        terminal::{self, RawMode, done, forward_input, has_terminal, refuse, relay, step},
+        terminal::{
+            self, RawMode, done, forward_input, has_terminal, refuse, relay, step, stopped,
+        },
     },
     anstream::adapter::strip_str,
     chrono::{Local, SecondsFormat},
@@ -75,6 +77,11 @@ impl crate::cli::Cli {
         if !child.wait()?.success() {
             git::undo(&repo, &repo.head()?.peel_to_commit()?, FLAKE_LOCK)?;
 
+            stopped(
+                "the flake inputs were not updated",
+                "the lock file is back as it was found",
+            );
+
             return Ok(ExitCode::FAILURE);
         }
 
@@ -122,6 +129,11 @@ impl crate::cli::Cli {
         if !git::commit(workdir, &commit_content, FLAKE_LOCK)? {
             git::undo(&repo, &old_head, FLAKE_LOCK)?;
 
+            stopped(
+                "could not commit the lock file",
+                "the flake inputs are back as they were found",
+            );
+
             return Ok(ExitCode::FAILURE);
         }
 
@@ -147,6 +159,11 @@ impl crate::cli::Cli {
         // the failed commit above takes the update with it
         if !status.success() {
             git::undo(&repo, &commit.parent(0)?, FLAKE_LOCK)?;
+
+            stopped(
+                "the system was not rebuilt",
+                "the commit is undone and the flake inputs are back as they were found",
+            );
 
             return Ok(ExitCode::FAILURE);
         }

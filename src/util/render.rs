@@ -49,7 +49,7 @@ pub fn paint(style: Style, text: &str) -> String {
 
 /// a line saying what kind of line it is before it says anything else
 ///
-/// `error`, `fatal`, `step`, `done`: every line rbld says in its own voice
+/// `error`, `fatal`, `note`, `step`, `done`: every line rbld says in its own voice
 /// opens with one of these, and the label is what the reader picks out first
 /// and what tells them how much of their attention the rest of it is owed.
 /// Only the label is styled, the message being left to whoever composed it,

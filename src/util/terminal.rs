@@ -47,12 +47,9 @@ pub fn has_terminal() -> bool {
         return true;
     }
 
-    refuse(
-        paint(HEADLINE, "cannot run without a terminal"),
-        paint(
-            NOTE,
-            "there is a question to answer on the way through, and it is read from a terminal",
-        ),
+    stopped(
+        "cannot run without a terminal",
+        "there is a question to answer on the way through, and it is read from a terminal",
     );
 
     false
@@ -66,6 +63,18 @@ pub fn has_terminal() -> bool {
 /// write to our own streams writes where we cannot see it, which is why a
 /// [`step`] keeps its own reckoning instead of reading this one.
 static SPOKEN: AtomicBool = AtomicBool::new(false);
+
+/// whether anything of ours has been said yet, and so whether a label has
+/// anything above it to be set apart from at all
+///
+/// [`SPOKEN`] answers this where it can, and where it cannot this stands in.
+/// git is handed our own streams rather than a pty, so what it says on its way
+/// out is said where there is nothing of ours to count it, and a line that
+/// followed it on the reckoning of [`SPOKEN`] alone would arrive believing
+/// itself the first thing on the screen. What is counted here instead is only
+/// whether the run has opened its mouth yet, which is the one thing that can
+/// be known of every program alike.
+static ANNOUNCED: AtomicBool = AtomicBool::new(false);
 
 /// whether any of `output` is still on the screen once it has all been written
 ///
@@ -90,7 +99,7 @@ fn left_standing(output: &str) -> bool {
 /// names, on a line of its own, the program about to be given the terminal
 ///
 /// commands run back to back leave nothing to say where one ends and the next
-/// begins, and a reader is left telling them apart by voice — nh's, nix's and
+/// begins, and a reader is left telling them apart by voice -- nh's, nix's and
 /// git's, none of them ours and no two alike. Saying which is about to speak
 /// costs a line and settles it, and saying it the way an `error` is said keeps
 /// the one voice that is ours sounding like itself throughout.
@@ -105,10 +114,6 @@ fn left_standing(output: &str) -> bool {
 /// is block buffered the moment it is redirected, and a heading delivered in a
 /// batch of its own after the fact heads nothing.
 pub fn step(message: &str) {
-    /// whether a step has been announced already, and so whether this one has
-    /// anything above it to be set apart from
-    static ANNOUNCED: AtomicBool = AtomicBool::new(false);
-
     let gap = if ANNOUNCED.swap(true, Ordering::Relaxed) {
         "\n"
     } else {
@@ -141,6 +146,38 @@ pub fn done(message: &str) {
     };
 
     anstream::eprintln!("{gap}{}", labelled(DONE, "done", message));
+}
+
+/// closes the command the other way, saying what stopped it and what became of
+/// the work
+///
+/// the twin of [`done`], and set apart from what is above it the same way.
+/// Where a [`refuse`] is a verdict reached by looking at something it can put
+/// on the screen, this is a run that got underway and was stopped: whatever
+/// stopped it has said why already, in its own voice, on its way out. What is
+/// left to say is what was undone on the way here, which is the one thing no
+/// other voice can answer for -- and being a sentence rather than a listing, it
+/// follows on the next line rather than being set apart below.
+///
+/// what it is set apart from is read off [`ANNOUNCED`] rather than [`SPOKEN`],
+/// a run being stopped by the very programs least likely to have been watched
+/// while they said so. Only a run stopped before it started has nothing above
+/// it.
+pub fn stopped(headline: &str, note: &str) {
+    let gap = if ANNOUNCED.load(Ordering::Relaxed) {
+        "\n"
+    } else {
+        ""
+    };
+
+    // whatever was standing has been answered for
+    SPOKEN.store(false, Ordering::Relaxed);
+
+    anstream::eprintln!(
+        "{gap}{}\n{}",
+        labelled(ERROR, "error", paint(HEADLINE, headline)),
+        labelled(NOTE, "note", paint(NOTE, note))
+    );
 }
 
 /// opens a pty the size of the terminal, for a command to be run on
