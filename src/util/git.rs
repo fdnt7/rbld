@@ -1,8 +1,16 @@
 //! the repository, as the commands have occasion to read and write it
 
-use std::{collections::HashSet, path::Path, process::Command};
+use std::{
+    collections::HashSet,
+    path::Path,
+    process::Command,
+    sync::{Arc, atomic::AtomicBool},
+};
 
-use git2::{Commit, Repository, ResetType, StatusOptions, build::CheckoutBuilder};
+use {
+    git2::{Commit, Repository, ResetType, StatusOptions, build::CheckoutBuilder},
+    signal_hook::{consts::SIGINT, flag, low_level},
+};
 
 /// every path the repository has a change against, in the order git reports them
 ///
@@ -55,7 +63,21 @@ pub fn workdir<'a>(repo: &'a Repository, flake: &'a str) -> &'a str {
 /// sitting in the index beside it. The repository's hooks are skipped: they
 /// are written for what a person edits, and a file a program regenerates is
 /// not that.
+///
+/// git is given our terminal as it stands rather than a pty, having something
+/// of its own to ask for on the way -- a passphrase for the key it signs with
+/// -- and asking it wherever it finds a terminal to ask on. That makes the two
+/// of us one foreground process group, and a ctrl-c answered into that prompt
+/// arrives at both: left to itself it would end us where we stand, with the
+/// work half done and nothing put back. Caught, it is git alone that goes, and
+/// what it leaves behind is answered for the way any other refused commit is.
+/// A handler is reset to its default across an exec, so git is left to die of
+/// the interrupt exactly as it would have.
 pub fn commit(flake: &str, message: &str, path: &str) -> anyhow::Result<bool> {
+    // nothing reads this: the flag is only somewhere for the handler to write,
+    // and the handler is only there to be something other than the default
+    let claim = flag::register(SIGINT, Arc::new(AtomicBool::new(false)))?;
+
     let status = Command::new("git")
         .arg("-C")
         .arg(flake)
@@ -65,9 +87,13 @@ pub fn commit(flake: &str, message: &str, path: &str) -> anyhow::Result<bool> {
         .arg("--no-verify")
         .arg("--")
         .arg(path)
-        .status()?;
+        .status();
 
-    Ok(status.success())
+    // what is registered here is given up, but the handler behind it stays for
+    // the rest of the run: a ctrl-c after this lands on nothing
+    low_level::unregister(claim);
+
+    Ok(status?.success())
 }
 
 /// puts head back to `target` and `path` back to what `target` has of it, and
