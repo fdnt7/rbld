@@ -12,7 +12,7 @@ use {
     },
     anstream::adapter::strip_str,
     chrono::{Local, SecondsFormat},
-    git2::{Repository, ResetType, StatusOptions},
+    git2::{Commit, Repository, ResetType, StatusOptions, build::CheckoutBuilder},
     pty_process::blocking,
     rustix::termios::{OptionalActions, OutputModes, tcgetattr, tcsetattr},
     terminal_size::terminal_size_of,
@@ -96,8 +96,12 @@ impl crate::cli::Cli {
         let output = relay(output)?;
 
         // nix has already said what went wrong, in its own words, on the way
-        // through: repeating it here would only bury it
+        // through: repeating it here would only bury it. What it may have
+        // written before it stopped is another matter, and goes back the way
+        // everything else this command writes goes back
         if !child.wait()?.success() {
+            undo(&repo, &repo.head()?.peel_to_commit()?)?;
+
             return Ok(ExitCode::FAILURE);
         }
 
@@ -131,7 +135,20 @@ impl crate::cli::Cli {
 
         step("committing the lock file");
 
+        let old_head = repo.head()?.peel_to_commit()?;
+
+        // git has said what went wrong on its way out, and what it leaves
+        // standing is an update nothing was built from. It goes back whole
+        // rather than being left: an update either arrives at a rebuilt system
+        // or leaves nothing behind, which is the refusal at the top of this
+        // function read from the other end -- a lock file left modified would
+        // meet the next run as dirt it will not start on, and one nobody asked
+        // for is a poor thing to be sent to clean up by hand. It goes back to
+        // the head we came in on rather than to the current one, so that a
+        // commit git managed to make before failing goes with it
         if !commit(workdir, &commit_content)? {
+            undo(&repo, &old_head)?;
+
             return Ok(ExitCode::FAILURE);
         }
 
@@ -152,9 +169,11 @@ impl crate::cli::Cli {
         drop(raw);
 
         // nh has said what went wrong on the way through, a refusal at its own
-        // prompt included
+        // prompt included; what it has not said is that the commit standing
+        // behind the rebuild goes when the rebuild does, for the same reason
+        // the failed commit above takes the update with it
         if !status.success() {
-            repo.reset(commit.parent(0)?.as_object(), ResetType::Hard, None)?;
+            undo(&repo, &commit.parent(0)?)?;
 
             return Ok(ExitCode::FAILURE);
         }
@@ -202,6 +221,33 @@ fn spawn_update(flake: &str) -> anyhow::Result<(Child, Box<dyn Read>)> {
         blocking::Command::new("nix").args(args).spawn(pts)?,
         Box::new(pty),
     ))
+}
+
+/// puts head back to `target` and the lock file back to what `target` has of
+/// it, and puts nothing else back
+///
+/// An update leaves behind one file and at most one commit, which is all there
+/// is to take back, and every caller takes back the same two things: the reset
+/// moves head off whatever commit is standing there, and the checkout fetches
+/// the lock file back out of where head now points. Whether a commit was made
+/// is the reset's business rather than the caller's -- the rebuild is only
+/// reached with one, and a commit that failed may or may not have left one
+/// behind, so each names the commit it means to end up on and lets a ref write
+/// that lands where it started be a ref write.
+///
+/// The reset is soft because moving head is all it is wanted for. A hard one
+/// would put the lock file back too, and then go on putting back whatever else
+/// it found: nix takes as long as it takes to update and nh as long as it
+/// takes to build, and what a person changed elsewhere in the tree while
+/// either was running is no part of what there is to undo.
+fn undo(repo: &Repository, target: &Commit<'_>) -> anyhow::Result<()> {
+    repo.reset(target.as_object(), ResetType::Soft, None)?;
+
+    let mut checkout = CheckoutBuilder::new();
+    checkout.force().path(FLAKE_LOCK);
+    repo.checkout_head(Some(&mut checkout))?;
+
+    Ok(())
 }
 
 /// what gets written to the notes ref for a rebuild `system` has just carried
