@@ -33,10 +33,11 @@ const TOTAL_DIFF: &str = "DIFF:";
 /// The spelling of "rebuild" instead of "rbld" is intentional for backwards compatibility.
 const REBUILD_NOTES_REF_PREFIX: &str = "refs/notes/rebuild";
 
+/// the one file an update has any business writing
+const FLAKE_LOCK: &str = "flake.lock";
+
 impl crate::cli::Cli {
     pub(in crate::cli) fn update(self) -> anyhow::Result<ExitCode> {
-        const FLAKE_LOCK: &str = "flake.lock";
-
         // asked at the end but answered for here: an update runs to a rebuild,
         // the rebuild stops to be confirmed, and there is nothing to be gained
         // from locking new inputs in and committing them on the way to a
@@ -130,17 +131,7 @@ impl crate::cli::Cli {
 
         step("committing the lock file");
 
-        let commit_status = Command::new("git")
-            .arg("-C")
-            .arg(workdir)
-            .arg("commit")
-            .arg("-m")
-            .arg(&commit_content)
-            .arg("--no-verify")
-            .arg("--")
-            .arg(FLAKE_LOCK)
-            .status()?;
-        if !commit_status.success() {
+        if !commit(workdir, &commit_content)? {
             return Ok(ExitCode::FAILURE);
         }
 
@@ -168,21 +159,7 @@ impl crate::cli::Cli {
             return Ok(ExitCode::FAILURE);
         }
 
-        let rebuild_summary = summarise_rebuild(&output);
-
-        // RFC 3339 is ISO 8601 pinned down, and what `date --iso-8601=seconds`
-        // prints; asking for the offset in full rather than `Z` keeps the note
-        // reading as the clock of whoever ran the rebuild read
-        let now = Local::now().to_rfc3339_opts(SecondsFormat::Secs, false);
-        let note = [
-            format!("build({system}): apply {FLAKE_LOCK} update"),
-            String::new(),
-        ]
-        .into_iter()
-        .chain(rebuild_summary)
-        .chain([String::new(), format!("Rebuilt-at: {now}")])
-        .collect::<Vec<_>>()
-        .join("\n");
+        let note = note(&system, summarise_rebuild(&output));
 
         repo.note(&signature, &signature, Some(&notes_ref), head, &note, false)?;
 
@@ -225,6 +202,46 @@ fn spawn_update(flake: &str) -> anyhow::Result<(Child, Box<dyn Read>)> {
         blocking::Command::new("nix").args(args).spawn(pts)?,
         Box::new(pty),
     ))
+}
+
+/// what gets written to the notes ref for a rebuild `system` has just carried
+/// out, `summary` being what it moved
+fn note(system: &str, summary: Vec<String>) -> String {
+    // RFC 3339 is ISO 8601 pinned down, and what `date --iso-8601=seconds`
+    // prints; asking for the offset in full rather than `Z` keeps the note
+    // reading as the clock of whoever ran the rebuild read
+    let now = Local::now().to_rfc3339_opts(SecondsFormat::Secs, false);
+
+    [
+        format!("build({system}): apply {FLAKE_LOCK} update"),
+        String::new(),
+    ]
+    .into_iter()
+    .chain(summary)
+    .chain([String::new(), format!("Rebuilt-at: {now}")])
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+/// commits the lock file on `flake`, saying whether git took it
+///
+/// The lock file is named as a pathspec rather than staged first, so what goes
+/// in is the one file this command has any business writing. The repository's
+/// hooks are skipped: they are written for what a person edits, and a lock
+/// file nix regenerates is not that.
+fn commit(flake: &str, message: &str) -> anyhow::Result<bool> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(flake)
+        .arg("commit")
+        .arg("--message")
+        .arg(message)
+        .arg("--no-verify")
+        .arg("--")
+        .arg(FLAKE_LOCK)
+        .status()?;
+
+    Ok(status.success())
 }
 
 /// starts `nh os switch` on `flake`, handing back what it writes
