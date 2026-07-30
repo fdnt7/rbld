@@ -5,14 +5,28 @@ use std::{
     fmt::Display,
     io::{IsTerminal, Read, Write},
     os::fd::AsFd,
-    sync::atomic::{AtomicBool, Ordering},
+    process::Child,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use {
     crate::util::render::{DONE, ERROR, FATAL, HEADLINE, NOTE, STEP, labelled, paint},
     anstream::adapter::strip_str,
     pty_process::blocking,
-    rustix::termios::{OptionalActions, Termios, tcgetattr, tcsetattr},
+    rustix::{
+        process::{Pid, Signal, kill_process_group},
+        termios::{OptionalActions, Termios, tcgetattr, tcsetattr},
+    },
+    signal_hook::{
+        SigId,
+        consts::SIGINT,
+        flag,
+        iterator::{Handle, Signals},
+        low_level,
+    },
     terminal_size::{Height, Width, terminal_size_of},
 };
 
@@ -211,6 +225,85 @@ pub fn forward_input(pty: &blocking::Pty) -> anyhow::Result<()> {
     });
 
     Ok(())
+}
+
+/// what becomes of a ctrl-c while a borrowed program is running, for as long
+/// as this lives
+///
+/// a ctrl-c goes to every process in the terminal's foreground group, which is
+/// a different set of people depending on how the program at hand was started,
+/// and in neither case the set we want. Left to its default it ends us on the
+/// spot, mid-run, with whatever we had written by then left standing and no
+/// hand left to put it back.
+///
+/// The handler is only ever installed, never taken down again: what is undone
+/// here is our own claim on the interrupt, and a ctrl-c arriving after that
+/// lands on a handler with nothing left to do. Where that matters, it is for
+/// the caller to say so.
+pub struct Interrupts(Claim);
+
+/// the two ways to have a ctrl-c and the way each is given up
+enum Claim {
+    /// caught and kept, so that a program sharing our terminal takes it alone
+    Held(SigId),
+    /// caught and passed on, to a program that would not otherwise hear it
+    Forwarded(Handle),
+}
+
+impl Interrupts {
+    /// takes the interrupt for ourselves and does nothing with it
+    ///
+    /// for a program given our own terminal rather than a pty: the ctrl-c is
+    /// delivered to it and to us alike, and what is wanted is for it to end
+    /// there. A handler is reset to its default across an exec, so the program
+    /// is left to die of the interrupt exactly as it would have.
+    pub fn held() -> anyhow::Result<Self> {
+        // nothing reads this: the flag is only somewhere for the handler to
+        // write, and the handler is only there to be something other than the
+        // default
+        let claim = flag::register(SIGINT, Arc::new(AtomicBool::new(false)))?;
+
+        Ok(Self(Claim::Held(claim)))
+    }
+
+    /// takes the interrupt and passes it on to `child`'s process group
+    ///
+    /// for a program given a pty, and with it a session of its own: the ctrl-c
+    /// is delivered to us and never reaches it, and left alone that ends the
+    /// run where it stands and leaves the program to find out later, when the
+    /// pty it was writing to closes under it. Passed on, the interrupt arrives
+    /// where it was aimed and the program stops the way it would have stopped.
+    ///
+    /// It goes to the group rather than to the one process: what made the
+    /// program a session leader made it a group leader too, and whatever it
+    /// spawned to do the work is in there with it.
+    pub fn forwarded_to(child: &Child) -> anyhow::Result<Self> {
+        let group = Pid::from_raw(i32::try_from(child.id())?)
+            .ok_or_else(|| anyhow::anyhow!("the program reported no process id to forward to"))?;
+        let mut signals = Signals::new([SIGINT])?;
+        let handle = signals.handle();
+
+        std::thread::spawn(move || {
+            for _ in &mut signals {
+                // the program has gone if this fails, which is what we were
+                // asking for
+                let _ = kill_process_group(group, Signal::INT);
+            }
+        });
+
+        Ok(Self(Claim::Forwarded(handle)))
+    }
+}
+
+impl Drop for Interrupts {
+    fn drop(&mut self) {
+        match &self.0 {
+            Claim::Held(claim) => {
+                low_level::unregister(*claim);
+            }
+            Claim::Forwarded(handle) => handle.close(),
+        }
+    }
 }
 
 /// the terminal, handed over to whatever is on the other end of a pty, and put

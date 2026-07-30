@@ -1,15 +1,10 @@
 //! the repository, as the commands have occasion to read and write it
 
-use std::{
-    collections::HashSet,
-    path::Path,
-    process::Command,
-    sync::{Arc, atomic::AtomicBool},
-};
+use std::{collections::HashSet, path::Path, process::Command};
 
 use {
+    crate::util::terminal::Interrupts,
     git2::{Commit, Repository, ResetType, StatusOptions, build::CheckoutBuilder},
-    signal_hook::{consts::SIGINT, flag, low_level},
 };
 
 /// every path the repository has a change against, in the order git reports them
@@ -68,15 +63,9 @@ pub fn workdir<'a>(repo: &'a Repository, flake: &'a str) -> &'a str {
 /// of its own to ask for on the way -- a passphrase for the key it signs with
 /// -- and asking it wherever it finds a terminal to ask on. That makes the two
 /// of us one foreground process group, and a ctrl-c answered into that prompt
-/// arrives at both: left to itself it would end us where we stand, with the
-/// work half done and nothing put back. Caught, it is git alone that goes, and
-/// what it leaves behind is answered for the way any other refused commit is.
-/// A handler is reset to its default across an exec, so git is left to die of
-/// the interrupt exactly as it would have.
+/// arrives at both, which is what the interrupts are held against.
 pub fn commit(flake: &str, message: &str, path: &str) -> anyhow::Result<bool> {
-    // nothing reads this: the flag is only somewhere for the handler to write,
-    // and the handler is only there to be something other than the default
-    let claim = flag::register(SIGINT, Arc::new(AtomicBool::new(false)))?;
+    let _interrupts = Interrupts::held()?;
 
     let status = Command::new("git")
         .arg("-C")
@@ -87,13 +76,9 @@ pub fn commit(flake: &str, message: &str, path: &str) -> anyhow::Result<bool> {
         .arg("--no-verify")
         .arg("--")
         .arg(path)
-        .status();
+        .status()?;
 
-    // what is registered here is given up, but the handler behind it stays for
-    // the rest of the run: a ctrl-c after this lands on nothing
-    low_level::unregister(claim);
-
-    Ok(status?.success())
+    Ok(status.success())
 }
 
 /// puts head back to `target` and `path` back to what `target` has of it, and
