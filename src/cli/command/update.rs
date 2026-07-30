@@ -124,6 +124,7 @@ impl crate::cli::Cli {
             .arg("commit")
             .arg("-m")
             .arg(&commit_content)
+            .arg("--no-verify")
             .arg("--")
             .arg(FLAKE_LOCK)
             .status()?;
