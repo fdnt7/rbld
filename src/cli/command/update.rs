@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     io::Read,
     path::Path,
     process::{Child, Command, ExitCode},
@@ -7,12 +6,13 @@ use std::{
 
 use {
     crate::util::{
+        git,
         render::{DIR, DISALLOWED, HEADLINE, branches, file_path, paint},
         terminal::{self, RawMode, done, forward_input, has_terminal, refuse, relay, step},
     },
     anstream::adapter::strip_str,
     chrono::{Local, SecondsFormat},
-    git2::{Commit, Repository, ResetType, StatusOptions, build::CheckoutBuilder},
+    git2::Repository,
     pty_process::blocking,
     rustix::termios::{OptionalActions, OutputModes, tcgetattr, tcsetattr},
     terminal_size::terminal_size_of,
@@ -47,31 +47,9 @@ impl crate::cli::Cli {
         }
 
         let repo = Repository::open(&self.flake)?;
-        let mut options = StatusOptions::new();
-        options
-            .include_ignored(false)
-            .renames_head_to_index(true)
-            .renames_index_to_workdir(true);
+        let workdir = git::workdir(&repo, &self.flake);
+        let paths = git::changed_paths(&repo)?;
 
-        let mut seen = HashSet::new();
-        let mut paths = vec![];
-
-        for entry in repo.statuses(Some(&mut options))?.iter() {
-            // renames and copies move a file, so both endpoints belong to the change
-            let deltas = [entry.head_to_index(), entry.index_to_workdir()];
-            let files = deltas
-                .iter()
-                .flatten()
-                .flat_map(|delta| [delta.new_file(), delta.old_file()]);
-
-            for path in files.filter_map(|file| file.path().and_then(Path::to_str)) {
-                if seen.insert(path.to_owned()) {
-                    paths.push(path.to_owned());
-                }
-            }
-        }
-
-        let workdir = repo.workdir().and_then(Path::to_str).unwrap_or(&self.flake);
         if !paths.is_empty() {
             // status paths are relative to the work tree, so it roots the listing
             let root = workdir.trim_end_matches('/');
@@ -100,7 +78,7 @@ impl crate::cli::Cli {
         // written before it stopped is another matter, and goes back the way
         // everything else this command writes goes back
         if !child.wait()?.success() {
-            undo(&repo, &repo.head()?.peel_to_commit()?)?;
+            git::undo(&repo, &repo.head()?.peel_to_commit()?, FLAKE_LOCK)?;
 
             return Ok(ExitCode::FAILURE);
         }
@@ -146,8 +124,8 @@ impl crate::cli::Cli {
         // for is a poor thing to be sent to clean up by hand. It goes back to
         // the head we came in on rather than to the current one, so that a
         // commit git managed to make before failing goes with it
-        if !commit(workdir, &commit_content)? {
-            undo(&repo, &old_head)?;
+        if !git::commit(workdir, &commit_content, FLAKE_LOCK)? {
+            git::undo(&repo, &old_head, FLAKE_LOCK)?;
 
             return Ok(ExitCode::FAILURE);
         }
@@ -173,7 +151,7 @@ impl crate::cli::Cli {
         // behind the rebuild goes when the rebuild does, for the same reason
         // the failed commit above takes the update with it
         if !status.success() {
-            undo(&repo, &commit.parent(0)?)?;
+            git::undo(&repo, &commit.parent(0)?, FLAKE_LOCK)?;
 
             return Ok(ExitCode::FAILURE);
         }
@@ -223,33 +201,6 @@ fn spawn_update(flake: &str) -> anyhow::Result<(Child, Box<dyn Read>)> {
     ))
 }
 
-/// puts head back to `target` and the lock file back to what `target` has of
-/// it, and puts nothing else back
-///
-/// An update leaves behind one file and at most one commit, which is all there
-/// is to take back, and every caller takes back the same two things: the reset
-/// moves head off whatever commit is standing there, and the checkout fetches
-/// the lock file back out of where head now points. Whether a commit was made
-/// is the reset's business rather than the caller's -- the rebuild is only
-/// reached with one, and a commit that failed may or may not have left one
-/// behind, so each names the commit it means to end up on and lets a ref write
-/// that lands where it started be a ref write.
-///
-/// The reset is soft because moving head is all it is wanted for. A hard one
-/// would put the lock file back too, and then go on putting back whatever else
-/// it found: nix takes as long as it takes to update and nh as long as it
-/// takes to build, and what a person changed elsewhere in the tree while
-/// either was running is no part of what there is to undo.
-fn undo(repo: &Repository, target: &Commit<'_>) -> anyhow::Result<()> {
-    repo.reset(target.as_object(), ResetType::Soft, None)?;
-
-    let mut checkout = CheckoutBuilder::new();
-    checkout.force().path(FLAKE_LOCK);
-    repo.checkout_head(Some(&mut checkout))?;
-
-    Ok(())
-}
-
 /// what gets written to the notes ref for a rebuild `system` has just carried
 /// out, `summary` being what it moved
 fn note(system: &str, summary: Vec<String>) -> String {
@@ -267,27 +218,6 @@ fn note(system: &str, summary: Vec<String>) -> String {
     .chain([String::new(), format!("Rebuilt-at: {now}")])
     .collect::<Vec<_>>()
     .join("\n")
-}
-
-/// commits the lock file on `flake`, saying whether git took it
-///
-/// The lock file is named as a pathspec rather than staged first, so what goes
-/// in is the one file this command has any business writing. The repository's
-/// hooks are skipped: they are written for what a person edits, and a lock
-/// file nix regenerates is not that.
-fn commit(flake: &str, message: &str) -> anyhow::Result<bool> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(flake)
-        .arg("commit")
-        .arg("--message")
-        .arg(message)
-        .arg("--no-verify")
-        .arg("--")
-        .arg(FLAKE_LOCK)
-        .status()?;
-
-    Ok(status.success())
 }
 
 /// starts `nh os switch` on `flake`, handing back what it writes

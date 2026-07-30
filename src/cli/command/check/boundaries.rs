@@ -1,12 +1,13 @@
-use std::{collections::HashSet, path::Path, process::ExitCode};
+use std::process::ExitCode;
 
 use {
     crate::util::{
+        git,
         render::{DIR, DISALLOWED, HEADLINE, NOTE, branches, file_path, paint},
         terminal::refuse,
     },
     anstyle::{AnsiColor, Style},
-    git2::{Repository, StatusOptions},
+    git2::Repository,
     termtree::Tree,
 };
 
@@ -29,36 +30,15 @@ impl crate::cli::Cli {
         let (system_prefix, host_prefix) = (format!("{system_dir}/"), format!("{HOST_DIR}/"));
         let repo = Repository::open(&self.flake)?;
 
-        let mut options = StatusOptions::new();
-        options
-            .include_untracked(false)
-            .include_ignored(false)
-            .renames_head_to_index(true)
-            .renames_index_to_workdir(true);
-
-        let mut seen = HashSet::new();
         let (mut host_paths, mut other_host_paths, mut shared_paths) = (vec![], vec![], vec![]);
 
-        for entry in repo.statuses(Some(&mut options))?.iter() {
-            // renames and copies move a file, so both endpoints belong to the change
-            let deltas = [entry.head_to_index(), entry.index_to_workdir()];
-            let files = deltas
-                .iter()
-                .flatten()
-                .flat_map(|delta| [delta.new_file(), delta.old_file()]);
-
-            for path in files.filter_map(|file| file.path().and_then(Path::to_str)) {
-                if !seen.insert(path.to_owned()) {
-                    continue;
-                }
-
-                if path.starts_with(&system_prefix) {
-                    host_paths.push(path.to_owned());
-                } else if path.starts_with(&host_prefix) {
-                    other_host_paths.push(path.to_owned());
-                } else {
-                    shared_paths.push(path.to_owned());
-                }
+        for path in git::changed_paths(&repo)? {
+            if path.starts_with(&system_prefix) {
+                host_paths.push(path);
+            } else if path.starts_with(&host_prefix) {
+                other_host_paths.push(path);
+            } else {
+                shared_paths.push(path);
             }
         }
 
@@ -82,7 +62,7 @@ impl crate::cli::Cli {
         };
 
         // status paths are relative to the work tree, so it roots the listing
-        let workdir = repo.workdir().and_then(Path::to_str).unwrap_or(&self.flake);
+        let workdir = git::workdir(&repo, &self.flake);
         let root = workdir.trim_end_matches('/');
         let mut tree =
             Tree::new(paint(DIR, if root.is_empty() { "/" } else { root })).with_glyphs(branches());
