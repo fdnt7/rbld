@@ -4,7 +4,7 @@ use std::{fmt::Display, sync::OnceLock};
 
 use {
     anstyle::{Ansi256Color, AnsiColor, Style},
-    termtree::GlyphPalette,
+    termtree::{GlyphPalette, Tree},
 };
 
 /// the `error` label, as opposed to the message it introduces
@@ -56,6 +56,18 @@ pub fn paint(style: Style, text: &str) -> String {
 /// which is how a headline comes through bold and a step's message plain.
 pub fn labelled(style: Style, label: &str, message: impl Display) -> String {
     format!("{}: {message}", paint(style, label))
+}
+
+/// a tree waiting for what sits under `root`
+///
+/// the paths git reports are relative to the work tree, so it is the work tree
+/// that roots a listing of them and the only line in it spelled out in full.
+/// A trailing slash is left to the branches to draw, except where trimming it
+/// would leave nothing to name at all.
+pub fn rooted(root: &str) -> Tree<String> {
+    let root = root.trim_end_matches('/');
+
+    Tree::new(paint(DIR, if root.is_empty() { "/" } else { root })).with_glyphs(branches())
 }
 
 /// a file path, with the directories leading to it in bold

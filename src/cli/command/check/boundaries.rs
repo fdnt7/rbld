@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use {
     crate::util::{
         git,
-        render::{DIR, DISALLOWED, HEADLINE, NOTE, branches, file_path, paint},
+        render::{DIR, DISALLOWED, HEADLINE, NOTE, file_path, paint, rooted},
         terminal::refuse,
     },
     anstyle::{AnsiColor, Style},
@@ -61,11 +61,7 @@ impl crate::cli::Cli {
             _ => return Ok(ExitCode::SUCCESS),
         };
 
-        // status paths are relative to the work tree, so it roots the listing
-        let workdir = git::workdir(&repo, &self.flake);
-        let root = workdir.trim_end_matches('/');
-        let mut tree =
-            Tree::new(paint(DIR, if root.is_empty() { "/" } else { root })).with_glyphs(branches());
+        let mut tree = rooted(git::workdir(&repo, &self.flake));
 
         // foreign hosts come first, since they are what makes the commit an
         // error at all; the notes repeat what the colours say, because prek

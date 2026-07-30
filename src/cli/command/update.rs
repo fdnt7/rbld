@@ -7,7 +7,7 @@ use std::{
 use {
     crate::util::{
         git,
-        render::{DIR, DISALLOWED, HEADLINE, branches, file_path, paint},
+        render::{DISALLOWED, HEADLINE, file_path, paint, rooted},
         terminal::{self, RawMode, done, forward_input, has_terminal, refuse, relay, step},
     },
     anstream::adapter::strip_str,
@@ -51,18 +51,13 @@ impl crate::cli::Cli {
         let paths = git::changed_paths(&repo)?;
 
         if !paths.is_empty() {
-            // status paths are relative to the work tree, so it roots the listing
-            let root = workdir.trim_end_matches('/');
             let leaves = paths
                 .iter()
                 .map(|path| Tree::new(file_path(DISALLOWED, path)));
-            let tree = Tree::new(paint(DIR, if root.is_empty() { "/" } else { root }))
-                .with_glyphs(branches())
-                .with_leaves(leaves);
 
             refuse(
                 paint(HEADLINE, "cannot update on a dirty working directory"),
-                tree,
+                rooted(workdir).with_leaves(leaves),
             );
 
             return Ok(ExitCode::FAILURE);
