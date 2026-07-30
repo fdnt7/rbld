@@ -16,7 +16,14 @@ use {
     chrono::{Local, SecondsFormat},
     git2::Repository,
     pty_process::blocking,
-    rustix::termios::{OptionalActions, OutputModes, tcgetattr, tcsetattr},
+    rustix::{
+        process::{Pid, Signal, kill_process_group},
+        termios::{OptionalActions, OutputModes, tcgetattr, tcsetattr},
+    },
+    signal_hook::{
+        consts::SIGINT,
+        iterator::{Handle, Signals},
+    },
     terminal_size::terminal_size_of,
     termtree::Tree,
 };
@@ -68,13 +75,16 @@ impl crate::cli::Cli {
         step("updating flake inputs");
 
         let (mut child, output) = spawn_update(workdir)?;
+        let interrupts = forward_interrupts(&child)?;
         let output = relay(output)?;
+        let status = child.wait()?;
+        interrupts.close();
 
         // nix has already said what went wrong, in its own words, on the way
         // through: repeating it here would only bury it. What it may have
         // written before it stopped is another matter, and goes back the way
         // everything else this command writes goes back
-        if !child.wait()?.success() {
+        if !status.success() {
             git::undo(&repo, &repo.head()?.peel_to_commit()?, FLAKE_LOCK)?;
 
             stopped(
@@ -211,6 +221,34 @@ fn spawn_update(flake: &str) -> anyhow::Result<(Child, Box<dyn Read>)> {
         blocking::Command::new("nix").args(args).spawn(pts)?,
         Box::new(pty),
     ))
+}
+
+/// passes a ctrl-c on to `child`, until the returned handle is closed
+///
+/// nix is given a pty of its own, and with it a session of its own, so a
+/// ctrl-c at our terminal is delivered to us and never reaches it. Left alone
+/// that ends the run where it stands and leaves nix to find out later, when
+/// the pty it was writing to closes under it. Caught and passed on, the
+/// interrupt arrives where it was aimed, nix stops the way it would have
+/// stopped, and whatever it had written by then is still ours to put back.
+///
+/// It goes to the group rather than to the one process: making nix a session
+/// leader made it a group leader too, and what it spawned to do the fetching
+/// is in there with it.
+fn forward_interrupts(child: &Child) -> anyhow::Result<Handle> {
+    let group = Pid::from_raw(i32::try_from(child.id())?)
+        .ok_or_else(|| anyhow::anyhow!("nix reported no process id to forward to"))?;
+    let mut signals = Signals::new([SIGINT])?;
+    let handle = signals.handle();
+
+    std::thread::spawn(move || {
+        for _ in &mut signals {
+            // nix has gone if this fails, which is what we were asking for
+            let _ = kill_process_group(group, Signal::INT);
+        }
+    });
+
+    Ok(handle)
 }
 
 /// what gets written to the notes ref for a rebuild `system` has just carried
