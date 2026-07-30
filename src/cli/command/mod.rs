@@ -1,4 +1,5 @@
-pub(in crate::cli) mod check;
+pub(super) mod check;
+pub(super) mod update;
 
 #[derive(clap::Subcommand, Debug)]
 pub(super) enum Command {

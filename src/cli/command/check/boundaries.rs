@@ -1,8 +1,11 @@
 use std::{collections::HashSet, path::Path, process::ExitCode};
 
 use {
-    crate::util::render::{DIR, ERROR, HEADLINE, NOTE, branches, file_path, paint},
-    anstyle::{Ansi256Color, AnsiColor, Style},
+    crate::util::{
+        render::{DIR, DISALLOWED, HEADLINE, NOTE, branches, file_path, paint},
+        terminal::refuse,
+    },
+    anstyle::{AnsiColor, Style},
     git2::{Repository, StatusOptions},
     termtree::Tree,
 };
@@ -16,13 +19,6 @@ const OTHER_HOST: Style = AnsiColor::Red.on_default();
 const THIS_HOST: Style = AnsiColor::Green.on_default();
 const SHARED: Style = AnsiColor::Yellow.on_default();
 
-/// a foreign host's files are the violation whichever headline applies, so they
-/// are marked rather than merely listed
-///
-/// the background is a dark red rather than [`AnsiColor::Red`], which is bright
-/// enough to swallow the text on it; `dimmed` is no help here, being an
-/// intensity applied to the foreground
-const DISALLOWED: Style = Style::new().bg_color(Some(anstyle::Color::Ansi256(Ansi256Color(52))));
 /// everything else sits where it belongs, so its files carry no marking
 const ALLOWED: Style = Style::new();
 
@@ -106,8 +102,7 @@ impl crate::cli::Cli {
             tree.push(group(SHARED_HEADER, "shared", SHARED, ALLOWED, paths));
         }
 
-        // anstream drops the styling when stdout is not a terminal
-        anstream::println!("\n{}: {headline}\n\n{tree}", paint(ERROR, "error"));
+        refuse(headline, tree);
 
         Ok(ExitCode::FAILURE)
     }

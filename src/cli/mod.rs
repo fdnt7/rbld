@@ -16,7 +16,7 @@ impl Cli {
     pub(super) fn run(self) -> anyhow::Result<std::process::ExitCode> {
         match &self.command {
             Command::Switch => todo!(),
-            Command::Update => todo!(),
+            Command::Update => self.update(),
             Command::Check { command } => match command {
                 command::check::CheckCommand::Boundaries => self.check_boundaries(),
             },

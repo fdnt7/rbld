@@ -1,9 +1,9 @@
 //! turning what a command has to say into styled terminal output
 
-use std::sync::OnceLock;
+use std::{fmt::Display, sync::OnceLock};
 
 use {
-    anstyle::{AnsiColor, Style},
+    anstyle::{Ansi256Color, AnsiColor, Style},
     termtree::GlyphPalette,
 };
 
@@ -17,6 +17,27 @@ pub const HEADLINE: Style = Style::new().bold();
 pub const DIR: Style = Style::new().bold();
 /// an aside spelling out in prose what a colour already says
 pub const NOTE: Style = Style::new().dimmed();
+/// the `step` label, naming the program about to be given the terminal
+///
+/// the same shape of line as [`ERROR`] and in blue where that is red, a
+/// command being made of several programs in turn being no kind of trouble.
+/// Blue also holds it apart from the green nh marks its own steps with, which
+/// it sits directly above and would otherwise be taken for
+pub const STEP: Style = AnsiColor::Blue.on_default().bold();
+/// the `done` label, closing a command that got where it was going
+///
+/// the same shape of line as [`STEP`], being the last of them, and green as
+/// the one colour worth spending on saying so; nh has stopped talking by the
+/// time this is said, so there is nothing green left for it to be taken for
+pub const DONE: Style = AnsiColor::Green.on_default().bold();
+/// a file that is itself the reason a command refused to run, so it is marked
+/// rather than merely listed
+///
+/// the background is a dark red rather than [`AnsiColor::Red`], which is bright
+/// enough to swallow the text on it; `dimmed` is no help here, being an
+/// intensity applied to the foreground
+pub const DISALLOWED: Style =
+    Style::new().bg_color(Some(anstyle::Color::Ansi256(Ansi256Color(52))));
 /// tree scaffolding, dim so it recedes behind what it holds
 const BRANCH: Style = Style::new().dimmed();
 
@@ -24,6 +45,17 @@ const BRANCH: Style = Style::new().dimmed();
 /// whatever follows; a default `Style` leaves `text` untouched
 pub fn paint(style: Style, text: &str) -> String {
     format!("{}{text}{}", style.render(), style.render_reset())
+}
+
+/// a line saying what kind of line it is before it says anything else
+///
+/// `error`, `fatal`, `step`, `done`: every line rbld says in its own voice
+/// opens with one of these, and the label is what the reader picks out first
+/// and what tells them how much of their attention the rest of it is owed.
+/// Only the label is styled, the message being left to whoever composed it,
+/// which is how a headline comes through bold and a step's message plain.
+pub fn labelled(style: Style, label: &str, message: impl Display) -> String {
+    format!("{}: {message}", paint(style, label))
 }
 
 /// a file path, with the directories leading to it in bold
@@ -59,7 +91,17 @@ pub fn branches() -> GlyphPalette {
         middle_skip,
         last_skip,
         skip_indent,
-    ] = GLYPHS.get_or_init(|| ["├", "└", "── ", "│", " ", "   "].map(|glyph| paint(BRANCH, glyph)));
+    ] = GLYPHS.get_or_init(|| {
+        [
+            "\u{251c}",
+            "\u{2514}",
+            "\u{2500}\u{2500} ",
+            "\u{2502}",
+            " ",
+            "   ",
+        ]
+        .map(|glyph| paint(BRANCH, glyph))
+    });
 
     GlyphPalette {
         middle_item,
