@@ -1,9 +1,9 @@
 //! taking a commit to a running system: build it, show what moves, ask once,
 //! activate, and leave a note saying so
 //!
-//! nh and nvd are given the terminal and nothing of theirs is read back: what
-//! the note says comes from the generations themselves, and from nvd asked
-//! for plain text rather than drawn for a screen.
+//! nh is given the terminal and nothing of its is read back: what the note
+//! says comes from the generations themselves, and from dix's diff of them,
+//! the same one nh shows when left to itself, kept without its colours.
 
 use std::process::{Command, ExitStatus};
 
@@ -103,8 +103,8 @@ pub fn deploy(
 
     step("comparing with the system it replaces");
 
-    let diff = Command::new("nvd")
-        .args(["--color", "always", "diff"])
+    let diff = Command::new("dix")
+        .args(["--color", "always"])
         .arg(replaced.path())
         .arg(new.path())
         .output()?;

@@ -4,7 +4,7 @@ extend-ignore-re = [
   "rust-analyzer",
   # Ignore "color"
   "anstyle::Color",
-  # Ignore "color": nvd's flag
+  # Ignore "color": dix's flag
   "\"--color\"",
 ]
 extend-ignore-identifiers-re = [

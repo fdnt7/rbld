@@ -46,7 +46,7 @@ pub struct Note {
     pub reasons: Vec<String>,
     pub generation: Generation,
     pub rebuilt_at: DateTime<FixedOffset>,
-    /// what moved between the generations, as nvd put it
+    /// what moved between the generations, as dix put it
     pub diff: String,
 }
 
