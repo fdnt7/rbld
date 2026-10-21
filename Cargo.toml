@@ -23,7 +23,6 @@ signal-hook = { version = "0.4.4", default-features = false, features = [
 ] }
 terminal_size = "0.4"
 termtree = "1.0.0"
-toml = "1.1.4"
 
 [lints.rust]
 unsafe_code = "forbid"

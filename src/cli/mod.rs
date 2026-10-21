@@ -1,25 +1,37 @@
 mod command;
-mod config;
+mod flake;
 
-use {command::Command, config::FileConfig};
+use {
+    clap::CommandFactory as _,
+    command::{Command, check::CheckCommand},
+    flake::Flake,
+};
 
 #[derive(clap::Parser)]
 pub struct Cli {
-    #[arg(long, value_name = "PATH", value_parser = FileConfig::load)]
-    config: Option<FileConfig>,
     #[command(subcommand)]
     command: Command,
-    flake: String,
 }
 
 impl Cli {
     pub(super) fn run(self) -> anyhow::Result<std::process::ExitCode> {
-        match &self.command {
-            Command::Switch => todo!(),
-            Command::Update => self.update(),
+        match self.command {
+            Command::Switch(_) => todo!(),
+            Command::Update(flake) => command::update::update(&resolve(flake)),
             Command::Check { command } => match command {
-                command::check::CheckCommand::Scope => self.check_scope(),
+                CheckCommand::Scope(flake) => command::check::scope::check_scope(&resolve(flake)),
             },
         }
     }
+}
+
+/// the flake a command was pointed at, or the error clap would have given had
+/// the argument been required, which is what it amounts to when nothing else
+/// names one
+fn resolve(flake: Flake) -> String {
+    flake.resolve().unwrap_or_else(|e| {
+        Cli::command()
+            .error(clap::error::ErrorKind::MissingRequiredArgument, e)
+            .exit()
+    })
 }
