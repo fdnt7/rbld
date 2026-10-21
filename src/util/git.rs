@@ -1,9 +1,13 @@
 //! the repository, as the commands have occasion to read and write it
 
-use std::{collections::HashSet, path::Path, process::Command};
+use std::{
+    collections::{BTreeSet, HashSet},
+    path::Path,
+    process::Command,
+};
 
 use {
-    crate::util::terminal::Interrupts,
+    crate::util::{scope::HOSTS, terminal::Interrupts},
     git2::{Commit, Repository, ResetType, StatusOptions, build::CheckoutBuilder},
 };
 
@@ -15,18 +19,53 @@ use {
 /// them there as without, and a command that stops for a dirty tree has no
 /// business stopping for those.
 pub fn changed_paths(repo: &Repository) -> anyhow::Result<Vec<String>> {
+    paths(repo, true)
+}
+
+/// every path the next commit would change, in the order git reports them
+///
+/// what [`changed_paths`] reports, less what has not been staged: a hook runs
+/// on the commit being made, and a change still in the work tree is no part of
+/// it.
+pub fn staged_paths(repo: &Repository) -> anyhow::Result<Vec<String>> {
+    paths(repo, false)
+}
+
+/// the names of the hosts, being the directories under `hosts/` in the index
+///
+/// the index rather than the work tree or head, so that a host the commit
+/// being made adds is a host already, and one it removes is no longer one.
+pub fn hosts(repo: &Repository) -> anyhow::Result<BTreeSet<String>> {
+    let prefix = format!("{HOSTS}/");
+
+    Ok(repo
+        .index()?
+        .iter()
+        .filter_map(|entry| {
+            let path = String::from_utf8(entry.path).ok()?;
+            let (host, _) = path.strip_prefix(&prefix)?.split_once('/')?;
+
+            Some(host.to_owned())
+        })
+        .collect())
+}
+
+fn paths(repo: &Repository, unstaged: bool) -> anyhow::Result<Vec<String>> {
     let mut options = StatusOptions::new();
     options
         .include_untracked(false)
         .include_ignored(false)
         .renames_head_to_index(true)
-        .renames_index_to_workdir(true);
+        .renames_index_to_workdir(unstaged);
 
     let mut seen = HashSet::new();
     let mut paths = vec![];
 
     for entry in repo.statuses(Some(&mut options))?.iter() {
-        let deltas = [entry.head_to_index(), entry.index_to_workdir()];
+        let deltas = [
+            entry.head_to_index(),
+            entry.index_to_workdir().filter(|_| unstaged),
+        ];
         let files = deltas
             .iter()
             .flatten()

@@ -2,4 +2,5 @@
 
 pub mod git;
 pub mod render;
+pub mod scope;
 pub mod terminal;
