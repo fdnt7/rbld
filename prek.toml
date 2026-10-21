@@ -1,9 +1,16 @@
-[[repos]]
-repo = "local"
+default_install_hook_types = ["pre-commit", "commit-msg"]
+default_stages = ["pre-commit"]
 
-[[repos.hooks]]
-id = "treefmt"
-name = "treefmt"
-entry = "treefmt --fail-on-change"
-language = "system"
-pass_filenames = false
+# Their commands come from the dev shell.
+[[repos]]
+repo = "https://github.com/fdnt7/devshell"
+rev = "a7e2c2129d30d3114118f45144e3ef34590e0526"
+hooks = [
+  { id = "ascii-only" },
+  { id = "cog-verify" },
+  { id = "commit-msg-length" },
+  { id = "no-co-authors" },
+  { id = "treefmt" },
+  { id = "typos" },
+  { id = "typos-commit-msg" },
+]

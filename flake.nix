@@ -3,63 +3,42 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    rust-overlay.url = "github:oxalica/rust-overlay";
-    treefmt-nix.url = "github:numtide/treefmt-nix";
+    # The dev shell, `nix fmt` and the formatting check, shared with my
+    # other projects; ./treefmt.nix adds to its formatters.
+    devshell = {
+      url = "github:fdnt7/devshell";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { self, nixpkgs, ... }@inputs:
-    let
-      systems = [ "x86_64-linux" ];
-      forAllSystems = nixpkgs.lib.genAttrs systems;
-      treefmtEval = forAllSystems (
-        system: inputs.treefmt-nix.lib.evalModule nixpkgs.legacyPackages.${system} ./treefmt.nix
-      );
-    in
     {
-      formatter = forAllSystems (system: treefmtEval.${system}.config.build.wrapper);
-      checks = forAllSystems (system: {
-        formatting = treefmtEval.${system}.config.build.check self;
-      });
+      self,
+      nixpkgs,
+      devshell,
+    }:
+    devshell.lib.mkOutputs { inherit self nixpkgs; } (pkgs: {
+      packages = with pkgs; [
+        cargo
+        clippy
+        rust-analyzer
+        rustc
+        rustfmt
+      ];
+      # Where rust-analyzer finds the standard library's source
+      env.RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
+      treefmt = ./treefmt.nix;
+    })
+    // {
       homeModules = rec {
         rbld = import ./home-manager.nix self;
         default = rbld;
       };
-      devShells = forAllSystems (
+
+      packages = nixpkgs.lib.genAttrs [ "x86_64-linux" ] (
         system:
         let
-          pkgs = import nixpkgs {
-            inherit system;
-            overlays = [ (import inputs.rust-overlay) ];
-          };
-        in
-        {
-          default =
-            let
-              inherit (pkgs)
-                mkShell
-                prek
-                rust-bin
-                ;
-            in
-            mkShell {
-              buildInputs = [
-                prek
-                (rust-bin.stable.latest.default.override {
-                  extensions = [
-                    "rust-src"
-                    "rust-analyzer"
-                  ];
-                })
-                self.formatter.${system}
-              ];
-            };
-        }
-      );
-      packages = forAllSystems (
-        system:
-        let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = nixpkgs.legacyPackages.${system};
           cargoToml = nixpkgs.lib.importTOML ./Cargo.toml;
         in
         {
