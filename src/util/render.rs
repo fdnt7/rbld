@@ -30,6 +30,9 @@ pub const STEP: Style = AnsiColor::Blue.on_default().bold();
 /// the one colour worth spending on saying so; nh has stopped talking by the
 /// time this is said, so there is nothing green left for it to be taken for
 pub const DONE: Style = AnsiColor::Green.on_default().bold();
+/// the `warning` label, for what went wrong without undoing what went right;
+/// yellow, between the green of [`DONE`] and the red of [`ERROR`]
+pub const WARNING: Style = AnsiColor::Yellow.on_default().bold();
 /// a file that is itself the reason a command refused to run, so it is marked
 /// rather than merely listed
 ///
@@ -49,7 +52,7 @@ pub fn paint(style: Style, text: &str) -> String {
 
 /// a line saying what kind of line it is before it says anything else
 ///
-/// `error`, `fatal`, `note`, `step`, `done`: every line rbld says in its own voice
+/// `error`, `fatal`, `warning`, `note`, `step`, `done`: every line rbld says in its own voice
 /// opens with one of these, and the label is what the reader picks out first
 /// and what tells them how much of their attention the rest of it is owed.
 /// Only the label is styled, the message being left to whoever composed it,

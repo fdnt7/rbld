@@ -24,6 +24,8 @@
         rust-analyzer
         rustc
         rustfmt
+        # what rbld runs besides nh, nix and git, which belong to the system
+        nvd
       ];
       # Where rust-analyzer finds the standard library's source
       env.RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
@@ -47,6 +49,13 @@
             pname = cargoToml.package.name;
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
+
+            # nh, nix and git are the system's own, and rbld uses whichever
+            # the system has; nvd is rbld's alone
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            postInstall = ''
+              wrapProgram $out/bin/rbld --prefix PATH : ${nixpkgs.lib.makeBinPath [ pkgs.nvd ]}
+            '';
           };
         }
       );
