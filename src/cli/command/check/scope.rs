@@ -24,7 +24,7 @@ impl crate::cli::Cli {
     /// split to make. The message is no part of it: the scope written there is
     /// a person's own word for the change, which is free to be narrower than
     /// the part of the configuration it sits in.
-    pub(in crate::cli) fn check_boundaries(self) -> anyhow::Result<ExitCode> {
+    pub(in crate::cli) fn check_scope(self) -> anyhow::Result<ExitCode> {
         let repo = Repository::open(&self.flake)?;
         let hosts = git::hosts(&repo)?;
 

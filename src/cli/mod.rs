@@ -18,7 +18,7 @@ impl Cli {
             Command::Switch => todo!(),
             Command::Update => self.update(),
             Command::Check { command } => match command {
-                command::check::CheckCommand::Boundaries => self.check_boundaries(),
+                command::check::CheckCommand::Scope => self.check_scope(),
             },
         }
     }
