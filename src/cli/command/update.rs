@@ -1,12 +1,11 @@
 use std::{
-    io::Read,
     path::Path,
     process::{Child, Command, ExitCode},
 };
 
 use {
     crate::util::{
-        git,
+        git, lock,
         render::{DISALLOWED, HEADLINE, file_path, paint, rooted},
         terminal::{
             self, Interrupts, RawMode, done, forward_input, has_terminal, refuse, relay, step,
@@ -17,13 +16,8 @@ use {
     chrono::{Local, SecondsFormat},
     git2::Repository,
     pty_process::blocking,
-    rustix::termios::{OptionalActions, OutputModes, tcgetattr, tcsetattr},
-    terminal_size::terminal_size_of,
     termtree::Tree,
 };
-
-/// what nix marks each input it changed with
-const BULLET: char = '\u{2022}';
 
 /// how nh names the generation being replaced, and so where its diff opens
 const OUTGOING: &str = "<<<";
@@ -68,10 +62,17 @@ impl crate::cli::Cli {
 
         step("updating flake inputs");
 
-        let (mut child, output) = spawn_update(workdir)?;
-        let interrupts = Interrupts::forwarded_to(&child)?;
-        let output = relay(output)?;
-        let status = child.wait()?;
+        let lock_path = Path::new(workdir).join(FLAKE_LOCK);
+        let before = std::fs::read_to_string(&lock_path)?;
+
+        // nix writes to the terminal as it would on its own, progress bar and
+        // all: nothing is read back from it, the summary coming from the lock
+        // file instead. It shares our terminal, so a ctrl-c reaches it and us
+        // both; ours is held, to be here to put the lock file back after it
+        let interrupts = Interrupts::held()?;
+        let status = Command::new("nix")
+            .args(["flake", "update", "--flake", workdir])
+            .status()?;
         drop(interrupts);
 
         // nix has already said what went wrong, in its own words, on the way
@@ -89,8 +90,6 @@ impl crate::cli::Cli {
             return Ok(ExitCode::FAILURE);
         }
 
-        let summary = summarise(&output);
-
         // the tree was clean going in, so a lock file nix left untouched is
         // one it found nothing newer for
         if !repo.status_file(Path::new(FLAKE_LOCK))?.is_wt_modified() {
@@ -99,11 +98,13 @@ impl crate::cli::Cli {
             return Ok(ExitCode::SUCCESS);
         }
 
-        let commit_content = [format!("build({FLAKE_LOCK}): update"), String::new()]
-            .into_iter()
-            .chain(summary)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let summary = lock::summarise(&before, &std::fs::read_to_string(&lock_path)?)?;
+        let subject = format!("build({FLAKE_LOCK}): update");
+        let commit_content = if summary.is_empty() {
+            subject
+        } else {
+            format!("{subject}\n\n{summary}")
+        };
 
         // a commit is rebuilt once per machine, each on its own schedule, so
         // the host it was rebuilt on is both what tells the notes apart and
@@ -182,41 +183,6 @@ impl crate::cli::Cli {
     }
 }
 
-/// starts `nix flake update` on `flake`, handing back what it writes
-///
-/// nix draws its progress bar only for what it takes to be a terminal, so when
-/// ours is one it is given a pty of the same size rather than a pipe: what
-/// comes back is then byte for byte what it would have put on the screen with
-/// nothing standing in between, down to the width it wrapped to. Where our own
-/// output is redirected there is no screen to stand in for, and a pipe leaves
-/// nix free to omit the escapes it would have omitted anyway.
-fn spawn_update(flake: &str) -> anyhow::Result<(Child, Box<dyn Read>)> {
-    let args = ["flake", "update", "--flake", flake];
-
-    if terminal_size_of(std::io::stderr()).is_none() {
-        // the write end lives only as long as the builder, so the read end sees
-        // an end of file once nix is the last one holding it
-        let (reader, writer) = std::io::pipe()?;
-        let child = Command::new("nix").args(args).stderr(writer).spawn()?;
-
-        return Ok((child, Box::new(reader)));
-    }
-
-    let (pty, pts) = terminal::pty()?;
-
-    // nix ends a line with a bare newline and leaves the carriage return to
-    // whatever it is writing to; left alone the pty would supply one, and the
-    // terminal we hand the line on to would supply a second on top of it
-    let mut termios = tcgetattr(&pty)?;
-    termios.output_modes.remove(OutputModes::ONLCR);
-    tcsetattr(&pty, OptionalActions::Now, &termios)?;
-
-    Ok((
-        blocking::Command::new("nix").args(args).spawn(pts)?,
-        Box::new(pty),
-    ))
-}
-
 /// what gets written to the notes ref for a rebuild `system` has just carried
 /// out, `summary` being what it moved
 fn note(system: &str, summary: Vec<String>) -> String {
@@ -264,39 +230,6 @@ fn spawn_switch(flake: &str) -> anyhow::Result<(Child, blocking::Pty)> {
         .spawn(pts)?;
 
     Ok((child, pty))
-}
-
-/// the inputs nix reported changing, in nix's own words
-///
-/// nix leads with a `warning:` naming the lock file, which the subject line
-/// says already, so the summary picks up at the first input instead. What
-/// follows is carried over character for character: nix indents a revision to
-/// sit under the one above it, having counted on the width of its own arrow,
-/// and respelling that arrow would owe the line above a column back.
-fn summarise(output: &str) -> Vec<String> {
-    let mut summary: Vec<String> = vec![];
-
-    for line in strip_str(output).to_string().lines() {
-        // nix redraws the progress bar over itself from the start of the line,
-        // so only what follows the last carriage return was ever left standing
-        let line = line
-            .rsplit_once('\r')
-            .map_or(line, |(_, standing)| standing);
-
-        if summary.is_empty() && !line.starts_with(BULLET) {
-            continue;
-        }
-
-        summary.push(line.to_owned());
-    }
-
-    // nix wipes the line it drew the progress bar on once it has no more use
-    // for it, leaving an empty one behind
-    while summary.last().is_some_and(String::is_empty) {
-        summary.pop();
-    }
-
-    summary
 }
 
 /// what the rebuild moved between the two generations, in nh's own words
