@@ -4,15 +4,14 @@ use std::{
 };
 
 use {
+    super::refuse_dirty,
     crate::util::{
         deploy::{self, Outcome},
         generation::Activation,
         git, lock,
-        render::{DISALLOWED, HEADLINE, file_path, paint, rooted},
-        terminal::{Interrupts, done, has_terminal, refuse, step, stopped},
+        terminal::{Interrupts, done, has_terminal, step, stopped},
     },
     git2::Repository,
-    termtree::Tree,
 };
 
 /// the one file an update has any business writing
@@ -32,15 +31,11 @@ pub(in crate::cli) fn update(flake: &str, asked: Option<Activation>) -> anyhow::
     let paths = git::changed_paths(&repo)?;
 
     if !paths.is_empty() {
-        let leaves = paths
-            .iter()
-            .map(|path| Tree::new(file_path(DISALLOWED, path)));
-
-        refuse(
-            paint(HEADLINE, "cannot update on a dirty working directory"),
-            rooted(workdir).with_leaves(leaves),
+        refuse_dirty(
+            "cannot update on a dirty working directory",
+            workdir,
+            &paths,
         );
-
         return Ok(ExitCode::FAILURE);
     }
 

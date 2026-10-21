@@ -17,7 +17,9 @@ pub struct Cli {
 impl Cli {
     pub(super) fn run(self) -> anyhow::Result<std::process::ExitCode> {
         match self.command {
-            Command::Switch(_) => todo!(),
+            Command::Switch { asked, flake } => {
+                command::switch::switch(&resolve(flake), asked.activation())
+            }
             Command::Update { asked, flake } => {
                 command::update::update(&resolve(flake), asked.activation())
             }
