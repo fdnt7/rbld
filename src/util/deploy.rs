@@ -62,7 +62,21 @@ pub fn deploy(
     let new = Generation::at(&link)?;
     let decision = Decision::new(asked);
     let replaced = decision.activation.replaces()?;
-    let from = note::deployed_from(repo, &note::notes_ref(host), &replaced)?;
+    let notes_ref = note::notes_ref(host);
+
+    // a clone with none of this host's notes yet, which is to say a fresh one,
+    // takes up the remote's before asking them where this deployment is from
+    if let Some(remote) = note::remote(repo)
+        && repo.refname_to_id(&notes_ref).is_err()
+    {
+        step(&format!("fetching the notes of {host} from {remote}"));
+
+        if let Err(e) = note::adopt(repo, workdir, &remote, &notes_ref) {
+            warn(&format!("the notes were not fetched: {e:#}"));
+        }
+    }
+
+    let from = note::deployed_from(repo, &notes_ref, &replaced)?;
 
     if new == replaced {
         anstream::eprintln!(
@@ -162,14 +176,6 @@ fn record(
     diff: String,
 ) {
     let notes_ref = note::notes_ref(host);
-    let remote = note::remote(repo);
-
-    if let Some(remote) = &remote
-        && let Err(e) = note::pull(repo, workdir, remote, &notes_ref)
-    {
-        warn(&format!("the notes were not fetched: {e:#}"));
-    }
-
     let written = (|| -> anyhow::Result<()> {
         let short = |oid: Oid| -> anyhow::Result<String> {
             Ok(repo
@@ -214,13 +220,20 @@ fn record(
         return;
     }
 
+    let remote = note::remote(repo);
+
     match remote {
         None => done(&format!("deployed and recorded on {host}")),
-        Some(remote) => match note::push(workdir, &remote, &notes_ref) {
-            Ok(()) => done(&format!("deployed and recorded on {host}, and pushed")),
-            Err(e) => warn(&format!(
-                "deployed and recorded on {host}, but not pushed; the next deployment pushes it: {e:#}"
-            )),
-        },
+        Some(remote) => {
+            // a round trip to the remote, which takes as long as it takes
+            step(&format!("pushing the note to {remote}"));
+
+            match note::push(workdir, &remote, &notes_ref) {
+                Ok(()) => done(&format!("deployed and recorded on {host}")),
+                Err(e) => warn(&format!(
+                    "deployed and recorded on {host}, but not pushed; the next deployment pushes it: {e:#}"
+                )),
+            }
+        }
     }
 }

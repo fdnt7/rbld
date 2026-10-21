@@ -22,6 +22,11 @@ use {
 /// shortened are already under
 const NOTES_REF_PREFIX: &str = "refs/notes/rebuild";
 
+/// where notes from the remote are held while they are merged into ours; under
+/// `refs/notes` as `git notes merge` wants, and outside [`NOTES_REF_PREFIX`],
+/// where it would pass for a host
+const INCOMING: &str = "refs/notes/rbld-incoming";
+
 /// the host's own notes ref
 pub fn notes_ref(host: &str) -> String {
     format!("{NOTES_REF_PREFIX}/{host}")
@@ -175,52 +180,84 @@ pub fn remote(repo: &Repository) -> Option<String> {
     })
 }
 
-/// brings `notes_ref` up to what `remote` has of it, saying whether the two
-/// now agree to the extent that ours can be pushed
+/// takes up what `remote` has of `notes_ref` where there is nothing of it here
+/// yet, as in a fresh clone, so that the notes this host wrote before can
+/// still say where its next deployment comes from
 ///
-/// Only one host writes its own ref, so the remote's copy is ordinarily the
-/// same as ours or behind it, behind being a push that never made it. Ahead is
-/// another clone on the same host, and is taken. Each having notes the other
-/// lacks has no sound way out, and is left for a person: ours stays as it is
-/// and is not pushed.
-pub fn pull(repo: &Repository, workdir: &str, remote: &str, notes_ref: &str) -> anyhow::Result<()> {
-    let listed = git(workdir, ["ls-remote", remote, notes_ref])?;
-    let Some(theirs) = listed.split_whitespace().next() else {
-        // nothing there yet, which a push will see to
-        return Ok(());
-    };
-    let theirs = Oid::from_str(theirs)?;
-    let ours = repo.refname_to_id(notes_ref).ok();
-
-    if ours == Some(theirs)
-        || ours.is_some_and(|ours| repo.graph_descendant_of(ours, theirs).unwrap_or(false))
-    {
+/// Anywhere else nothing is fetched ahead of writing: only this host writes
+/// its own ref, so the remote's copy is ordinarily ours or behind it, and
+/// [`push`] sees to the rare time it is not.
+pub fn adopt(
+    repo: &Repository,
+    workdir: &str,
+    remote: &str,
+    notes_ref: &str,
+) -> anyhow::Result<()> {
+    if repo.refname_to_id(notes_ref).is_ok() {
         return Ok(());
     }
 
-    git(workdir, ["fetch", "--quiet", remote, notes_ref])?;
-
-    if let Some(ours) = ours
-        && !repo.graph_descendant_of(theirs, ours)?
-    {
-        bail!("{notes_ref} here and on {remote} each have notes the other lacks");
-    }
-
-    repo.reference(
-        notes_ref,
-        theirs,
-        true,
-        &format!("rbld: fetched from {remote}"),
-    )?;
+    fetch(workdir, remote, notes_ref, notes_ref)?;
 
     Ok(())
 }
 
-/// sends `notes_ref` to `remote`, which takes it only as a fast forward
+/// sends `notes_ref` to `remote`
+///
+/// The remote takes it as a fast forward, which it ordinarily is. Where it is
+/// not, the remote has notes this clone never saw, written from another clone
+/// on the same host: those are fetched and merged in, ours winning for any
+/// commit both have a note on, being the deployment just made, and the push
+/// tried again.
 pub fn push(workdir: &str, remote: &str, notes_ref: &str) -> anyhow::Result<()> {
+    let Err(rejected) = git(workdir, ["push", "--quiet", remote, notes_ref]) else {
+        return Ok(());
+    };
+
+    // a push that failed for want of a connection fails the fetch the same way
+    if !fetch(workdir, remote, notes_ref, INCOMING)? {
+        return Err(rejected);
+    }
+
+    let merged = git(
+        workdir,
+        [
+            "notes",
+            "--ref",
+            notes_ref,
+            "merge",
+            "--quiet",
+            "--strategy",
+            "ours",
+            INCOMING,
+        ],
+    );
+    // the fetched notes are in ours or they are nowhere, and either way are
+    // no longer wanted under a name of their own
+    git(workdir, ["update-ref", "-d", INCOMING])?;
+    merged?;
+
     git(workdir, ["push", "--quiet", remote, notes_ref])?;
 
     Ok(())
+}
+
+/// fetches what `remote` has of `notes_ref` into `into`, saying whether it had
+/// any to fetch
+fn fetch(workdir: &str, remote: &str, notes_ref: &str, into: &str) -> anyhow::Result<bool> {
+    if git(workdir, ["ls-remote", remote, notes_ref])?
+        .trim()
+        .is_empty()
+    {
+        return Ok(false);
+    }
+
+    git(
+        workdir,
+        ["fetch", "--quiet", remote, &format!("+{notes_ref}:{into}")],
+    )?;
+
+    Ok(true)
 }
 
 /// runs git on `workdir`, handing back what it printed, and what it said on
