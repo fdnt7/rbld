@@ -195,8 +195,22 @@ impl Deployment {
     /// in step, saying rather than failing where either goes wrong: the system
     /// has moved by now, and a commit undone for want of a note would be the
     /// worse record of it
+    ///
+    /// A deployment that activated nothing, of a commit whose note already
+    /// names the running generation, is left unwritten: it would only replace
+    /// that note, the one saying what the deployment did, with one saying it
+    /// did nothing.
     pub fn record(self, repo: &Repository, workdir: &str, commit: Oid) {
         let host = self.host.clone();
+
+        if self.activation.is_none() && self.from == Some(commit) {
+            let commit = short(repo, commit).unwrap_or_else(|_| commit.to_string());
+            done(&format!(
+                "{host} is already deployed from {commit}; its note stands"
+            ));
+            return;
+        }
+
         let notes_ref = note::notes_ref(&host);
 
         if let Err(e) = self.write(repo, &notes_ref, commit) {
@@ -221,23 +235,14 @@ impl Deployment {
     }
 
     fn write(self, repo: &Repository, notes_ref: &str, commit: Oid) -> anyhow::Result<()> {
-        let short = |oid: Oid| -> anyhow::Result<String> {
-            Ok(repo
-                .find_object(oid, None)?
-                .short_id()?
-                .as_str()
-                .unwrap_or_default()
-                .to_owned())
-        };
-
         let note = Note {
             host: self.host,
-            commit: short(commit)?,
+            commit: short(repo, commit)?,
             // deploying a commit again comes from itself, which says nothing
             from: self
                 .from
                 .filter(|&from| from != commit)
-                .map(short)
+                .map(|from| short(repo, from))
                 .transpose()?,
             activation: self.activation,
             reasons: self.reasons,
@@ -258,4 +263,14 @@ impl Deployment {
 
         Ok(())
     }
+}
+
+/// `oid` abbreviated as git would, to as few digits as keep it unambiguous
+fn short(repo: &Repository, oid: Oid) -> anyhow::Result<String> {
+    Ok(repo
+        .find_object(oid, None)?
+        .short_id()?
+        .as_str()
+        .unwrap_or_default()
+        .to_owned())
 }
