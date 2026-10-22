@@ -24,7 +24,11 @@ use {
 /// introduces it.
 pub fn refuse(headline: impl Display, body: impl Display) {
     // anstream drops the styling when stdout is not a terminal
-    anstream::println!("\n{}\n\n{body}", labelled(ERROR, "error", headline));
+    let _ = writeln!(
+        anstream::stdout(),
+        "\n{}\n\n{body}",
+        labelled(ERROR, "error", headline)
+    );
 }
 
 /// says the command never got started
@@ -33,7 +37,7 @@ pub fn refuse(headline: impl Display, body: impl Display) {
 /// reached a verdict, whereas reaching here means it never got that far, so
 /// there is nothing to show underneath and nowhere but stderr for it to go.
 pub fn fatal(error: &anyhow::Error) {
-    anstream::eprintln!("{}", labelled(FATAL, "fatal", error));
+    say(labelled(FATAL, "fatal", error));
 }
 
 /// whether there is a terminal to run in front of, saying what is missing
@@ -82,7 +86,7 @@ static ANNOUNCED: AtomicBool = AtomicBool::new(false);
 /// is block buffered the moment it is redirected, and a heading delivered in a
 /// batch of its own after the fact heads nothing.
 pub fn step(message: &str) {
-    anstream::eprintln!("{}{}", gap(), labelled(STEP, "step", message));
+    say(format_args!("{}{}", gap(), labelled(STEP, "step", message)));
 }
 
 /// closes the command, saying what it got done
@@ -92,7 +96,7 @@ pub fn step(message: &str) {
 /// was only ever answering for its own part of it. This is the one line that
 /// answers for the whole.
 pub fn done(message: &str) {
-    anstream::eprintln!("{}{}", gap(), labelled(DONE, "done", message));
+    say(format_args!("{}{}", gap(), labelled(DONE, "done", message)));
 }
 
 /// says something went wrong that the run carries on past, its work standing
@@ -100,7 +104,11 @@ pub fn done(message: &str) {
 /// the middle ground between [`done`] and [`stopped`]: what was asked for
 /// happened, and what did not is no reason to take it back.
 pub fn warn(message: &str) {
-    anstream::eprintln!("{}{}", gap(), labelled(WARNING, "warning", message));
+    say(format_args!(
+        "{}{}",
+        gap(),
+        labelled(WARNING, "warning", message)
+    ));
 }
 
 /// closes the command the other way, saying what stopped it and what became of
@@ -114,12 +122,22 @@ pub fn warn(message: &str) {
 /// than a listing, it follows on the next line rather than being set apart
 /// below.
 pub fn stopped(headline: &str, note: &str) {
-    anstream::eprintln!(
+    say(format_args!(
         "{}{}\n{}",
         gap(),
         labelled(ERROR, "error", paint(HEADLINE, headline)),
         labelled(NOTE, "note", paint(NOTE, note))
-    );
+    ));
+}
+
+/// says `text` on a line of its own on stderr, or says nothing where there is
+/// nowhere left to say it
+///
+/// a terminal that has hung up answers every write after it with an error,
+/// and anstream's own macros panic on one. What is left to do by then is put
+/// back what the run wrote, which matters more than telling nobody about it.
+pub fn say(text: impl Display) {
+    let _ = writeln!(anstream::stderr(), "{text}");
 }
 
 /// the blank line that sets a label apart from what is above it, where
@@ -141,9 +159,9 @@ fn gap() -> &'static str {
 /// an interrupt, and the caller is left to undo what it did on the way here
 /// the same way it would for a no.
 pub fn ask(question: &str) -> anyhow::Result<bool> {
-    let mut stderr = std::io::stderr();
-    anstream::eprint!("{}{} [y/N] ", gap(), paint(HEADLINE, question));
-    stderr.flush()?;
+    let mut stderr = anstream::stderr();
+    let _ = write!(stderr, "{}{} [y/N] ", gap(), paint(HEADLINE, question));
+    let _ = stderr.flush();
 
     let mut key = [0];
     let read = {
@@ -152,7 +170,7 @@ pub fn ask(question: &str) -> anyhow::Result<bool> {
     };
 
     let yes = read == 1 && key[0].eq_ignore_ascii_case(&b'y');
-    anstream::eprintln!("{}", if yes { "yes" } else { "no" });
+    say(if yes { "yes" } else { "no" });
 
     Ok(yes)
 }

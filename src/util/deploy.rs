@@ -12,7 +12,7 @@ use {
         generation::{Activation, Decision, Generation},
         note::{self, Note},
         render::{NOTE, paint},
-        terminal::{ask, done, step, warn},
+        terminal::{ask, done, say, step, warn},
     },
     anstream::adapter::strip_str,
     chrono::Local,
@@ -108,13 +108,10 @@ pub fn deploy(
     };
 
     if new == replaced {
-        anstream::eprintln!(
-            "{}",
-            paint(
-                NOTE,
-                "the system is already this generation; there is nothing to activate"
-            )
-        );
+        say(paint(
+            NOTE,
+            "the system is already this generation; there is nothing to activate",
+        ));
 
         return Ok(Outcome::Deployed(deployment(None, String::new())));
     }
@@ -127,11 +124,13 @@ pub fn deploy(
         .arg(new.path())
         .output()?;
     let diff = String::from_utf8_lossy(&diff.stdout).into_owned();
-    anstream::eprint!("{diff}");
+    if !diff.is_empty() {
+        say(diff.trim_end_matches('\n'));
+    }
 
     let verb = decision.activation.verb();
     for reason in &decision.reasons {
-        anstream::eprintln!("{}", paint(NOTE, &format!("{verb}, because {reason}")));
+        say(paint(NOTE, &format!("{verb}, because {reason}")));
     }
 
     if !ask(&format!("{verb} to this generation?"))? {
