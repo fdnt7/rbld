@@ -21,16 +21,34 @@ use {
 
 /// how a deployment ended
 pub enum Outcome {
-    /// the generation is in place, and a note says so; whatever was committed
-    /// for it stays
-    Deployed,
+    /// the generation is in place, waiting to be recorded against the commit
+    /// it came of; whatever was committed for it stays
+    Deployed(Deployment),
     /// it never got that far, whether nh failed or the answer was no, as the
     /// headline says; nothing was activated, and whatever was committed for it
     /// goes
     NotDeployed(&'static str),
 }
 
-/// deploys `commit` from `workdir` on `host`, as `asked` or else as decided
+/// a deployment that has happened, with everything its note will say but the
+/// commit it is written on
+///
+/// That is left to the caller, which may yet give the commit a message of its
+/// own, and so an id of its own, before there is anything to write it on.
+pub struct Deployment {
+    host: String,
+    /// the commit the replaced generation was deployed from
+    from: Option<Oid>,
+    /// how the generation was activated, or nothing where there was nothing
+    /// to activate
+    activation: Option<Activation>,
+    reasons: Vec<String>,
+    generation: Generation,
+    diff: String,
+}
+
+/// deploys what `workdir` has checked out on `host`, as `asked` or else as
+/// decided
 ///
 /// An error is only ever one met before anything was activated, so a caller
 /// can treat it as [`Outcome::NotDeployed`]. Once something is, what goes
@@ -39,7 +57,6 @@ pub fn deploy(
     repo: &Repository,
     workdir: &str,
     host: &str,
-    commit: Oid,
     asked: Option<Activation>,
 ) -> anyhow::Result<Outcome> {
     step("building the system");
@@ -77,6 +94,18 @@ pub fn deploy(
     }
 
     let from = note::deployed_from(repo, &notes_ref, &replaced)?;
+    let deployment = |activation, diff| Deployment {
+        host: host.to_owned(),
+        from,
+        activation,
+        reasons: if activation.is_some() {
+            decision.reasons.clone()
+        } else {
+            vec![]
+        },
+        generation: new.clone(),
+        diff,
+    };
 
     if new == replaced {
         anstream::eprintln!(
@@ -86,19 +115,8 @@ pub fn deploy(
                 "the system is already this generation; there is nothing to activate"
             )
         );
-        record(
-            repo,
-            workdir,
-            host,
-            commit,
-            from,
-            None,
-            &decision,
-            &new,
-            String::new(),
-        );
 
-        return Ok(Outcome::Deployed);
+        return Ok(Outcome::Deployed(deployment(None, String::new())));
     }
 
     step("comparing with the system it replaces");
@@ -134,19 +152,10 @@ pub fn deploy(
         warn("nh reported a failure, but the new generation is in place, so it is recorded");
     }
 
-    record(
-        repo,
-        workdir,
-        host,
-        commit,
-        from,
+    Ok(Outcome::Deployed(deployment(
         Some(decision.activation),
-        &decision,
-        &new,
         strip_str(&diff).to_string(),
-    );
-
-    Ok(Outcome::Deployed)
+    )))
 }
 
 fn activate(activation: Activation, generation: &Generation) -> std::io::Result<ExitStatus> {
@@ -156,27 +165,37 @@ fn activate(activation: Activation, generation: &Generation) -> std::io::Result<
         .status()
 }
 
-/// writes the note for a deployment that has happened, and keeps the remote
-/// in step, saying rather than failing where either goes wrong: the system has
-/// moved by now, and a commit undone for want of a note would be the worse
-/// record of it
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each is one fact the note records"
-)]
-fn record(
-    repo: &Repository,
-    workdir: &str,
-    host: &str,
-    commit: Oid,
-    from: Option<Oid>,
-    activation: Option<Activation>,
-    decision: &Decision,
-    generation: &Generation,
-    diff: String,
-) {
-    let notes_ref = note::notes_ref(host);
-    let written = (|| -> anyhow::Result<()> {
+impl Deployment {
+    /// writes the note for this deployment on `commit`, and keeps the remote
+    /// in step, saying rather than failing where either goes wrong: the system
+    /// has moved by now, and a commit undone for want of a note would be the
+    /// worse record of it
+    pub fn record(self, repo: &Repository, workdir: &str, commit: Oid) {
+        let host = self.host.clone();
+        let notes_ref = note::notes_ref(&host);
+
+        if let Err(e) = self.write(repo, &notes_ref, commit) {
+            warn(&format!("the deployment was not recorded: {e:#}"));
+            return;
+        }
+
+        match note::remote(repo) {
+            None => done(&format!("deployed and recorded on {host}")),
+            Some(remote) => {
+                // a round trip to the remote, which takes as long as it takes
+                step(&format!("pushing the note to {remote}"));
+
+                match note::push(workdir, &remote, &notes_ref) {
+                    Ok(()) => done(&format!("deployed and recorded on {host}")),
+                    Err(e) => warn(&format!(
+                        "deployed and recorded on {host}, but not pushed; the next deployment pushes it: {e:#}"
+                    )),
+                }
+            }
+        }
+    }
+
+    fn write(self, repo: &Repository, notes_ref: &str, commit: Oid) -> anyhow::Result<()> {
         let short = |oid: Oid| -> anyhow::Result<String> {
             Ok(repo
                 .find_object(oid, None)?
@@ -187,53 +206,31 @@ fn record(
         };
 
         let note = Note {
-            host: host.to_owned(),
+            host: self.host,
             commit: short(commit)?,
             // deploying a commit again comes from itself, which says nothing
-            from: from.filter(|&from| from != commit).map(short).transpose()?,
-            activation,
-            reasons: if activation.is_some() {
-                decision.reasons.clone()
-            } else {
-                vec![]
-            },
-            generation: generation.clone(),
+            from: self
+                .from
+                .filter(|&from| from != commit)
+                .map(short)
+                .transpose()?,
+            activation: self.activation,
+            reasons: self.reasons,
+            generation: self.generation,
             rebuilt_at: Local::now().fixed_offset(),
-            diff,
+            diff: self.diff,
         };
 
         let signature = repo.signature()?;
         repo.note(
             &signature,
             &signature,
-            Some(&notes_ref),
+            Some(notes_ref),
             commit,
             &note.render(),
             true,
         )?;
 
         Ok(())
-    })();
-
-    if let Err(e) = written {
-        warn(&format!("the deployment was not recorded: {e:#}"));
-        return;
-    }
-
-    let remote = note::remote(repo);
-
-    match remote {
-        None => done(&format!("deployed and recorded on {host}")),
-        Some(remote) => {
-            // a round trip to the remote, which takes as long as it takes
-            step(&format!("pushing the note to {remote}"));
-
-            match note::push(workdir, &remote, &notes_ref) {
-                Ok(()) => done(&format!("deployed and recorded on {host}")),
-                Err(e) => warn(&format!(
-                    "deployed and recorded on {host}, but not pushed; the next deployment pushes it: {e:#}"
-                )),
-            }
-        }
     }
 }

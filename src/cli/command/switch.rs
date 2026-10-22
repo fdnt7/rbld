@@ -42,8 +42,11 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
     // what became of it
     let _interrupts = Interrupts::held()?;
 
-    match deploy::deploy(&repo, workdir, &host, commit.id(), asked)? {
-        Outcome::Deployed => Ok(ExitCode::SUCCESS),
+    match deploy::deploy(&repo, workdir, &host, asked)? {
+        Outcome::Deployed(deployment) => {
+            deployment.record(&repo, workdir, commit.id());
+            Ok(ExitCode::SUCCESS)
+        }
         Outcome::NotDeployed(headline) => {
             stopped(headline, "the system is as it was");
             Ok(ExitCode::FAILURE)

@@ -126,8 +126,11 @@ pub(in crate::cli) fn update(flake: &str, asked: Option<Activation>) -> anyhow::
     // a deployment that never happened, for whatever reason, takes the
     // commit standing behind it along with it, for the same reason the
     // failed commit above takes the update with it
-    let headline = match deploy::deploy(&repo, workdir, &host, commit.id(), asked) {
-        Ok(Outcome::Deployed) => return Ok(ExitCode::SUCCESS),
+    let headline = match deploy::deploy(&repo, workdir, &host, asked) {
+        Ok(Outcome::Deployed(deployment)) => {
+            deployment.record(&repo, workdir, commit.id());
+            return Ok(ExitCode::SUCCESS);
+        }
         Ok(Outcome::NotDeployed(headline)) => headline.to_owned(),
         Err(e) => format!("{e:#}"),
     };
