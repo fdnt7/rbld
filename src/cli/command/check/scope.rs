@@ -1,19 +1,10 @@
-use std::{collections::BTreeMap, process::ExitCode};
+use std::process::ExitCode;
 
 use {
-    crate::util::{
-        git,
-        render::{HEADLINE, NOTE, file_path, paint, rooted},
-        scope::Scope,
-        terminal::refuse,
-    },
-    anstyle::Style,
+    super::super::refuse_split,
+    crate::util::{git, scope},
     git2::Repository,
-    termtree::Tree,
 };
-
-/// a scope's name, bold so it heads the files under it
-const SCOPE: Style = Style::new().bold();
 
 /// refuses a commit whose staged changes span more than one scope
 ///
@@ -25,45 +16,20 @@ const SCOPE: Style = Style::new().bold();
 /// the part of the configuration it sits in.
 pub(in crate::cli) fn check_scope(flake: &str) -> anyhow::Result<ExitCode> {
     let repo = Repository::open(flake)?;
-    let hosts = git::hosts(&repo)?;
-
-    let mut scopes: BTreeMap<Scope, Vec<String>> = BTreeMap::new();
-    for path in git::staged_paths(&repo)? {
-        scopes
-            .entry(Scope::of(&path, &hosts))
-            .or_default()
-            .push(path);
-    }
+    let scopes = scope::group(git::staged_paths(&repo)?, &git::hosts(&repo)?);
 
     if scopes.len() <= 1 {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let headline = paint(
-        HEADLINE,
+    refuse_split(
         &format!(
             "this commit spans {} scopes; split it into one commit for each",
             scopes.len()
         ),
+        git::workdir(&repo, flake),
+        &scopes,
     );
-
-    let mut tree = rooted(git::workdir(&repo, flake));
-    for (scope, paths) in &scopes {
-        // the kind is said in words as well as set apart, since prek
-        // captures this hook and strips the styling when it does
-        let heading = format!(
-            "{} {}",
-            paint(SCOPE, &scope.to_string()),
-            paint(NOTE, &format!("({})", scope.kind()))
-        );
-        let leaves = paths
-            .iter()
-            .map(|path| Tree::new(file_path(Style::new(), path)));
-
-        tree.push(Tree::new(heading).with_leaves(leaves));
-    }
-
-    refuse(headline, tree);
 
     Ok(ExitCode::FAILURE)
 }

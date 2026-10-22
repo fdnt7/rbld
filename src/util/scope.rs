@@ -6,7 +6,10 @@
 //! alone, with one fact from outside it: which hosts there are, since a host's
 //! Home Manager entry point sits among a user's files under the host's name.
 
-use std::{collections::BTreeSet, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 /// one directory per host, each holding that host's NixOS configuration
 pub const HOSTS: &str = "hosts";
@@ -74,6 +77,20 @@ impl Scope {
             Self::Repo => "repository",
         }
     }
+}
+
+/// `paths` grouped by the part of the configuration each belongs to, given
+/// the names of the hosts
+pub fn group(paths: Vec<String>, hosts: &BTreeSet<String>) -> BTreeMap<Scope, Vec<String>> {
+    let mut scopes: BTreeMap<Scope, Vec<String>> = BTreeMap::new();
+    for path in paths {
+        scopes
+            .entry(Scope::of(&path, hosts))
+            .or_default()
+            .push(path);
+    }
+
+    scopes
 }
 
 impl fmt::Display for Scope {
