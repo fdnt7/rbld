@@ -5,7 +5,7 @@ use std::{
     fmt::Display,
     io::{IsTerminal, Read, Write},
     sync::{
-        Arc,
+        Arc, LazyLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -13,7 +13,11 @@ use std::{
 use {
     crate::util::render::{DONE, ERROR, FATAL, HEADLINE, NOTE, STEP, WARNING, labelled, paint},
     rustix::termios::{OptionalActions, Termios, tcgetattr, tcsetattr},
-    signal_hook::{SigId, consts::SIGINT, flag, low_level},
+    signal_hook::{
+        SigId,
+        consts::{SIGHUP, SIGINT, SIGTERM},
+        flag, low_level,
+    },
 };
 
 /// says no, and shows what the command was looking at when it said so
@@ -210,6 +214,37 @@ impl Drop for Interrupts {
     fn drop(&mut self) {
         low_level::unregister(self.0);
     }
+}
+
+/// whether the run has been told to stop since [`hold_stops`], by its terminal
+/// hanging up or by being asked to terminate
+static STOP: LazyLock<Arc<AtomicBool>> = LazyLock::new(Arc::default);
+
+/// takes a hangup or a request to terminate as word to stop, rather than as
+/// the end of us, from here to the end of the run
+///
+/// either one ends us on the spot by default, as a ctrl-c does, with whatever
+/// we had written by then left standing. A hangup comes from a terminal being
+/// closed, and reaches the program that has it as well as us: it dies of it,
+/// and we see it fail and put things back, as after a ctrl-c. A request to
+/// terminate may be for us alone, and the program carries on to the end of
+/// its part; it is then for [`told_to_stop`] to keep the run from going any
+/// further than that.
+///
+/// The claim is never given up: the run is undone on its way out, and ending
+/// it outright stays with a kill.
+pub fn hold_stops() -> anyhow::Result<()> {
+    for signal in [SIGHUP, SIGTERM] {
+        flag::register(signal, Arc::clone(&STOP))?;
+    }
+
+    Ok(())
+}
+
+/// whether the run has been told to stop, and so should go no further than
+/// it has
+pub fn told_to_stop() -> bool {
+    STOP.load(Ordering::Relaxed)
 }
 
 /// the terminal, stood down for a single key to be read off it, and put back

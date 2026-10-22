@@ -9,7 +9,7 @@ use {
         deploy::{self, Outcome},
         generation::Activation,
         git, lock,
-        terminal::{Interrupts, done, has_terminal, step, stopped},
+        terminal::{Interrupts, done, has_terminal, hold_stops, step, stopped},
     },
     git2::Repository,
 };
@@ -25,6 +25,10 @@ pub(in crate::cli) fn update(flake: &str, asked: Option<Activation>) -> anyhow::
     if !has_terminal() {
         return Ok(ExitCode::FAILURE);
     }
+
+    // anything written from here is undone on the way out, closing the
+    // terminal on it included
+    hold_stops()?;
 
     let repo = Repository::open(flake)?;
     let workdir = git::workdir(&repo, flake);

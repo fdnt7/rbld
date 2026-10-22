@@ -12,7 +12,7 @@ use {
         generation::{Activation, Decision, Generation},
         note::{self, Note},
         render::{NOTE, paint},
-        terminal::{ask, done, say, step, warn},
+        terminal::{ask, done, say, step, told_to_stop, warn},
     },
     anstream::adapter::strip_str,
     chrono::Local,
@@ -29,6 +29,9 @@ pub enum Outcome {
     /// goes
     NotDeployed(&'static str),
 }
+
+/// the headline for a deployment given up on being told to stop
+const STOPPED: &str = "rbld was told to stop";
 
 /// a deployment that has happened, with everything its note will say but the
 /// commit it is written on
@@ -59,6 +62,10 @@ pub fn deploy(
     host: &str,
     asked: Option<Activation>,
 ) -> anyhow::Result<Outcome> {
+    if told_to_stop() {
+        return Ok(Outcome::NotDeployed(STOPPED));
+    }
+
     step("building the system");
 
     // the out link keeps the build from being collected between being built
@@ -74,6 +81,12 @@ pub fn deploy(
 
     if !built.success() {
         return Ok(Outcome::NotDeployed("the system was not built"));
+    }
+
+    // a stop that came while nh was building, and so did not end it, is
+    // heeded here, before anything is asked or activated
+    if told_to_stop() {
+        return Ok(Outcome::NotDeployed(STOPPED));
     }
 
     let new = Generation::at(&link)?;
@@ -133,7 +146,14 @@ pub fn deploy(
         say(paint(NOTE, &format!("{verb}, because {reason}")));
     }
 
-    if !ask(&format!("{verb} to this generation?"))? {
+    let yes = ask(&format!("{verb} to this generation?"))?;
+
+    // a stop that came while the question stood outranks its answer
+    if told_to_stop() {
+        return Ok(Outcome::NotDeployed(STOPPED));
+    }
+
+    if !yes {
         return Ok(Outcome::NotDeployed("the system was not activated"));
     }
 

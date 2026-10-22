@@ -8,7 +8,9 @@ use {
         git,
         render::{HEADLINE, NOTE, paint},
         scope::{self, Scope},
-        terminal::{Interrupts, has_terminal, refuse, step, stopped, warn},
+        terminal::{
+            Interrupts, has_terminal, hold_stops, refuse, step, stopped, told_to_stop, warn,
+        },
     },
     git2::Repository,
 };
@@ -32,6 +34,10 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
     if !has_terminal() {
         return Ok(ExitCode::FAILURE);
     }
+
+    // anything written from here is undone on the way out, closing the
+    // terminal on it included
+    hold_stops()?;
 
     let repo = Repository::open(flake)?;
     let workdir = git::workdir(&repo, flake);
@@ -112,9 +118,12 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
 
     let headline = match deploy::deploy(&repo, workdir, &host, asked) {
         Ok(Outcome::Deployed(deployment)) => {
-            step("writing the commit message");
-
-            let written = git::amend(workdir, &template(scope, deployment.diff()))?;
+            // the system has moved, so the commit stays; what goes is the
+            // editor, there being nobody left to write in it
+            let written = !told_to_stop() && {
+                step("writing the commit message");
+                git::amend(workdir, &template(scope, deployment.diff()))?
+            };
             let commit = repo.head()?.peel_to_commit()?;
 
             if !written || commit.message().is_ok_and(|m| m.contains(PLACEHOLDER)) {
