@@ -67,6 +67,19 @@ impl Scope {
         }
     }
 
+    /// the scope a commit message names this part by, where it is the part's
+    /// own name: a host's, a user's, the lock file's
+    ///
+    /// Commits to what every host shares, or to the repository around it, are
+    /// named for what in them changed, which no path says.
+    pub fn in_message(&self) -> Option<&str> {
+        match self {
+            Self::Host(name) | Self::User(name) => Some(name),
+            Self::FlakeLock => Some(FLAKE_LOCK),
+            Self::Nixos | Self::Repo => None,
+        }
+    }
+
     /// what kind of part this is, said beside its name in a listing
     pub const fn kind(&self) -> &'static str {
         match self {

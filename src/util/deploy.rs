@@ -166,6 +166,12 @@ fn activate(activation: Activation, generation: &Generation) -> std::io::Result<
 }
 
 impl Deployment {
+    /// what moved between the generations, as dix put it, without colours;
+    /// empty where nothing was activated
+    pub fn diff(&self) -> &str {
+        &self.diff
+    }
+
     /// writes the note for this deployment on `commit`, and keeps the remote
     /// in step, saying rather than failing where either goes wrong: the system
     /// has moved by now, and a commit undone for want of a note would be the

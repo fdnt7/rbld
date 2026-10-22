@@ -107,7 +107,7 @@ pub(in crate::cli) fn update(flake: &str, asked: Option<Activation>) -> anyhow::
     // for is a poor thing to be sent to clean up by hand. It goes back to
     // the head we came in on rather than to the current one, so that a
     // commit git managed to make before failing goes with it
-    if !git::commit(workdir, &commit_content, FLAKE_LOCK)? {
+    if !git::commit(workdir, &commit_content, &[FLAKE_LOCK])? {
         git::undo(&repo, &old_head, FLAKE_LOCK)?;
 
         stopped(

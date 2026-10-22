@@ -20,7 +20,7 @@ const SCOPE: Style = Style::new().bold();
 
 #[derive(clap::Subcommand, Debug)]
 pub(super) enum Command {
-    /// Deploy the commit checked out
+    /// Deploy the commit checked out, committing any changes on top of it first
     Switch {
         #[command(flatten)]
         asked: Asked,
