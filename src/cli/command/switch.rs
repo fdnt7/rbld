@@ -9,7 +9,7 @@ use {
         render::{HEADLINE, NOTE, paint},
         scope::{self, Scope},
         terminal::{
-            Interrupts, has_terminal, hold_stops, refuse, step, stopped, told_to_stop, warn,
+            Interrupts, ask, has_terminal, hold_stops, refuse, step, stopped, told_to_stop, warn,
         },
     },
     git2::Repository,
@@ -18,6 +18,10 @@ use {
 /// what a placeholder message is told apart by, being what no conventional
 /// commit message has in it
 const PLACEHOLDER: &str = "FIXME_";
+
+/// what a refused message opens again under, above it, where it is seen
+/// first; the reasons are left where the hook gave them
+const REFUSED: &str = "# Refused by the commit-msg hook; its reasons are on the terminal.\n";
 
 /// git's own scissors line, from which down a message is shown and not kept
 const SCISSORS: &str = "# ------------------------ >8 ------------------------";
@@ -200,17 +204,18 @@ fn placeholder(scope: &Scope) -> String {
 
 /// asks for the message in the editor until the message hook takes one,
 /// handing it back as the hook left it, or nothing where it was given up:
-/// emptied, left as it was offered, or the editor failing
+/// emptied, left as it was offered, the editor failing, or not edited again
+/// once refused
 ///
-/// A refused message opens again as it was written, with what the hook said
-/// of it under it, to be fixed rather than written again.
+/// A refusal stops on the terminal, where the hook has just said why, and
+/// asks whether to edit the message again, rather than reopening the editor
+/// at once: an editor that comes straight back reads as a second commit to
+/// write, as in a rebase. Edited again, the message opens as written, with a
+/// line above it saying it was refused.
 fn write_message(workdir: &str, scope: &Scope, diff: &str) -> anyhow::Result<Option<String>> {
     let mut message = placeholder(scope);
-    let mut complaint: Option<String> = None;
+    let mut refused = false;
 
-    // said once: the editor takes the terminal straight after, so anything
-    // said between one opening and the next goes unseen, and a refusal is
-    // said in the editor instead, above the message it refused
     step("writing the commit message");
 
     loop {
@@ -219,7 +224,7 @@ fn write_message(workdir: &str, scope: &Scope, diff: &str) -> anyhow::Result<Opt
             return Ok(None);
         }
 
-        let Some(edited) = git::edit(workdir, &offer(&message, complaint.as_deref(), diff))? else {
+        let Some(edited) = git::edit(workdir, &offer(&message, refused, diff))? else {
             return Ok(None);
         };
         let edited = cleaned(&edited);
@@ -228,40 +233,34 @@ fn write_message(workdir: &str, scope: &Scope, diff: &str) -> anyhow::Result<Opt
         }
         message = edited;
 
-        let refusal = if message.contains(PLACEHOLDER) {
-            format!("It still has the placeholder's {PLACEHOLDER} in it.")
+        let question = if message.contains(PLACEHOLDER) {
+            format!("the message still has the placeholder's {PLACEHOLDER} in it; edit it again?")
+        } else if let Some(taken) = git::check_message(workdir, &message)? {
+            return Ok(Some(taken));
         } else {
-            match git::check_message(workdir, &message)? {
-                Ok(taken) => return Ok(Some(taken)),
-                Err(said) => said,
-            }
+            "the commit-msg hook refused the message; edit it again?".to_owned()
         };
 
-        complaint = Some(refusal);
+        if !ask(&question)? || told_to_stop() {
+            return Ok(None);
+        }
+        refused = true;
     }
 }
 
-/// what the editor opens on: `message`, with what was said against it, if
-/// anything, as comments under it, and what the deployment moves below the
-/// scissors, to write the message from without it being kept
-fn offer(message: &str, complaint: Option<&str>, diff: &str) -> String {
+/// what the editor opens on: `message`, with a line above it where it was
+/// refused, and what the deployment moves below the scissors, to write the
+/// message from without it being kept
+fn offer(message: &str, refused: bool, diff: &str) -> String {
     let diff = diff.trim();
     let moves = if diff.is_empty() {
         "nothing is activated: the system already has this generation in place"
     } else {
         diff
     };
+    let above = if refused { REFUSED } else { "" };
 
-    let mut text = format!("{}\n", message.trim_end());
-    if let Some(complaint) = complaint {
-        text.push_str("\n# This message was refused:\n");
-        for line in complaint.trim().lines() {
-            text.push_str(format!("# {line}").trim_end());
-            text.push('\n');
-        }
-    }
-
-    format!("{text}\n{SCISSORS}\n{moves}\n")
+    format!("{above}{}\n\n{SCISSORS}\n{moves}\n", message.trim_end())
 }
 
 /// what git keeps of a message written in the editor: everything above the
@@ -333,7 +332,7 @@ mod tests {
     fn the_diff_sits_below_the_scissors() {
         let text = offer(
             &placeholder(&Scope::User("f".into())),
-            None,
+            false,
             "ADDED\n[A.] posy-cursors 1.6\n",
         );
         let (kept, shown) = text.split_once(SCISSORS).unwrap_or_default();
@@ -343,15 +342,15 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_message_comes_back_with_why() {
+    fn a_refused_message_comes_back_marked_above() {
         let text = offer(
             "fix(f): a subject well over the fifty characters allowed\n",
-            Some("line 1: subject is 57 characters, over 50\n\n  more"),
+            true,
             "",
         );
 
         assert!(text.starts_with(
-            "fix(f): a subject well over the fifty characters allowed\n\n# This message was refused:\n# line 1: subject is 57 characters, over 50\n#\n#   more\n"
+            "# Refused by the commit-msg hook; its reasons are on the terminal.\nfix(f): a subject well over the fifty characters allowed\n\n"
         ));
         assert_eq!(
             cleaned(&text),

@@ -208,35 +208,30 @@ pub fn edit(flake: &str, text: &str) -> anyhow::Result<Option<String>> {
 
 /// runs the repository's `commit-msg` hook on `message`, as git would on its
 /// way to a commit, handing back the message as the hook leaves it where it
-/// passes, which a hook may have added to, and what it said where it refuses;
-/// a repository without one passes
+/// passes, which a hook may have added to, and nothing where it refuses; a
+/// repository without one passes
 ///
-/// What the hook says is read back rather than shown, to be put in front of
-/// the message it refused, and so comes without its colours.
-pub fn check_message(flake: &str, message: &str) -> anyhow::Result<Result<String, String>> {
+/// On the terminal, for what it says to be seen as it would on a refused
+/// commit, colours and all, before anything is asked about it.
+pub fn check_message(flake: &str, message: &str) -> anyhow::Result<Option<String>> {
     let mut file = tempfile::Builder::new()
         .prefix("rbld-")
         .suffix(".txt")
         .tempfile()?;
     file.write_all(message.as_bytes())?;
 
-    let output = Command::new("git")
+    let status = Command::new("git")
         .arg("-C")
         .arg(flake)
         .args(["hook", "run", "--ignore-missing", "commit-msg", "--"])
         .arg(file.path())
-        .output()?;
+        .status()?;
 
-    if output.status.success() {
-        return Ok(Ok(std::fs::read_to_string(file.path())?));
+    if !status.success() {
+        return Ok(None);
     }
 
-    let said = [output.stdout, output.stderr]
-        .iter()
-        .map(|bytes| anstream::adapter::strip_str(&String::from_utf8_lossy(bytes)).to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(Err(said))
+    Ok(Some(std::fs::read_to_string(file.path())?))
 }
 
 /// gives head `message`, as it stands, saying whether git took it
