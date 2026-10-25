@@ -1,4 +1,5 @@
 pub(super) mod check;
+pub(super) mod reword;
 pub(super) mod status;
 pub(super) mod switch;
 pub(super) mod update;
@@ -32,6 +33,11 @@ pub(super) enum Command {
     Update {
         #[command(flatten)]
         asked: Asked,
+        #[command(flatten)]
+        flake: Flake,
+    },
+    /// Reword the commit checked out, carrying its deployment note along
+    Reword {
         #[command(flatten)]
         flake: Flake,
     },

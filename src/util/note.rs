@@ -345,6 +345,81 @@ pub fn adopt(
     Ok(())
 }
 
+/// moves the note `from` has under `notes_ref` to `to`, the commit `from`
+/// was reworded as, saying whether there was one to move
+///
+/// The note says the same of `to` as it did of `from`, the tree being the
+/// same, but for the commit its subject names. Each notes commit made for it
+/// is signed, as every commit here is; where any step fails, the ref goes
+/// back to where it was, and the note stays on `from`.
+pub fn carry(
+    repo: &Repository,
+    workdir: &str,
+    notes_ref: &str,
+    from: Oid,
+    to: Oid,
+) -> anyhow::Result<bool> {
+    let Ok(note) = repo.find_note(Some(notes_ref), from) else {
+        return Ok(false);
+    };
+    let text = renamed(
+        note.message().unwrap_or_default(),
+        &from.to_string(),
+        &short(repo, to)?,
+    );
+
+    let before = repo.refname_to_id(notes_ref)?;
+    let moved = (|| -> anyhow::Result<()> {
+        let signature = repo.signature()?;
+        repo.note(&signature, &signature, Some(notes_ref), to, &text, true)?;
+        sign_tip(workdir, notes_ref)?;
+        repo.note_delete(from, Some(notes_ref), &signature, &signature)?;
+        sign_tip(workdir, notes_ref)?;
+        Ok(())
+    })();
+
+    if let Err(e) = moved {
+        repo.reference(notes_ref, before, true, "rbld: put back a note not carried")?;
+        return Err(e);
+    }
+
+    Ok(true)
+}
+
+/// `text` with the id of the commit `from` names in its subject, however
+/// abbreviated, given as `to`
+fn renamed(text: &str, from: &str, to: &str) -> String {
+    let (subject, rest) = text.split_once('\n').unwrap_or((text, ""));
+    let subject = subject
+        .split(' ')
+        .map(|word| {
+            let id = word.trim_end_matches([':', ';', ',']);
+            if id.len() >= 7 && from.starts_with(id) {
+                word.replacen(id, to, 1)
+            } else {
+                word.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if text.contains('\n') {
+        format!("{subject}\n{rest}")
+    } else {
+        subject
+    }
+}
+
+/// `oid` abbreviated as git would
+fn short(repo: &Repository, oid: Oid) -> anyhow::Result<String> {
+    Ok(repo
+        .find_object(oid, None)?
+        .short_id()?
+        .as_str()
+        .unwrap_or_default()
+        .to_owned())
+}
+
 /// sends `notes_ref` to `remote`
 ///
 /// The remote takes it as a fast forward, which it ordinarily is. Where it is
@@ -525,6 +600,23 @@ fn git<const N: usize>(workdir: &str, args: [&str; N]) -> anyhow::Result<String>
 #[cfg(test)]
 mod tests {
     use {super::*, crate::util::units::Change};
+
+    #[test]
+    fn a_carried_note_names_the_new_commit() {
+        let from = "edd81a4b2c3d4e5f60718293a4b5c6d7e8f90123";
+        assert_eq!(
+            renamed("fw16: switch to edd81a4\n\nHost: fw16\n", from, "1f2e3d4"),
+            "fw16: switch to 1f2e3d4\n\nHost: fw16\n"
+        );
+        assert_eq!(
+            renamed(
+                "fw16: edd81a4b builds what's running; nothing to activate\n\nFrom: edd81a4\n",
+                from,
+                "1f2e3d4"
+            ),
+            "fw16: 1f2e3d4 builds what's running; nothing to activate\n\nFrom: edd81a4\n"
+        );
+    }
 
     fn note(activation: Option<Activation>, diff: &str) -> Note {
         Note {

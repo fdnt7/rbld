@@ -234,6 +234,65 @@ pub fn check_message(flake: &str, message: &str) -> anyhow::Result<Option<String
     Ok(Some(std::fs::read_to_string(file.path())?))
 }
 
+/// whether `commit` is on the upstream of the branch checked out, which is
+/// to say pushed; a branch without one has nothing pushed to say so of
+pub fn published(repo: &Repository, commit: Oid) -> anyhow::Result<bool> {
+    let head = repo.head()?;
+    if !head.is_branch() {
+        return Ok(false);
+    }
+    let Ok(upstream) = git2::Branch::wrap(head).upstream() else {
+        return Ok(false);
+    };
+    let Some(pushed) = upstream.get().target() else {
+        return Ok(false);
+    };
+
+    Ok(pushed == commit || repo.graph_descendant_of(pushed, commit)?)
+}
+
+/// what head changes, file by file, as `git show --stat` has it
+pub fn stat(flake: &str) -> anyhow::Result<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(flake)
+        .args(["show", "--stat", "--format=", "HEAD"])
+        .output()?;
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// gives head `message` and nothing else, its tree left as it is whatever is
+/// staged, saying whether git took it
+///
+/// The message has been through the message hook by [`check_message`], and
+/// the tree is the one head already had, so neither hook runs again.
+pub fn reword(flake: &str, message: &str) -> anyhow::Result<bool> {
+    let _interrupts = Interrupts::held()?;
+
+    let mut file = tempfile::Builder::new()
+        .prefix("rbld-")
+        .suffix(".txt")
+        .tempfile()?;
+    file.write_all(message.as_bytes())?;
+
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(flake)
+        .args([
+            "commit",
+            "--amend",
+            "--only",
+            "--no-verify",
+            "--cleanup=verbatim",
+            "--file",
+        ])
+        .arg(file.path())
+        .status()?;
+
+    Ok(status.success())
+}
+
 /// gives head `message`, as it stands, saying whether git took it
 ///
 /// The hooks are skipped: the changes went through the pre-commit hook before
