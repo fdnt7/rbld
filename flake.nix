@@ -54,16 +54,17 @@
               pkgs.installShellFiles
               pkgs.makeWrapper
             ];
-            # the completions come of rbld's own commands, so it writes them,
-            # before it is wrapped
+            # the scripts only ask rbld, by this path, to complete what is typed,
+            # so they cannot fall behind its commands; written before it is
+            # wrapped, and the wrapper takes the same path
             #
             # nh, nix and git are the system's own, and rbld uses whichever
             # the system has; dix is rbld's alone
             postInstall = ''
               installShellCompletion --cmd rbld \
-                --bash <($out/bin/rbld completions bash) \
-                --fish <($out/bin/rbld completions fish) \
-                --zsh <($out/bin/rbld completions zsh)
+                --bash <(COMPLETE=bash $out/bin/rbld) \
+                --fish <(COMPLETE=fish $out/bin/rbld) \
+                --zsh <(COMPLETE=zsh $out/bin/rbld)
               wrapProgram $out/bin/rbld --prefix PATH : ${nixpkgs.lib.makeBinPath [ pkgs.dix ]}
             '';
           };

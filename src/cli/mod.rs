@@ -28,17 +28,6 @@ impl Cli {
             Command::Check { command } => match command {
                 CheckCommand::Scope(flake) => command::check::scope::check_scope(&resolve(flake)),
             },
-            // generated from the commands as they are declared, so they cannot
-            // fall behind them
-            Command::Completions { shell } => {
-                clap_complete::generate(
-                    shell,
-                    &mut Self::command(),
-                    "rbld",
-                    &mut std::io::stdout(),
-                );
-                Ok(std::process::ExitCode::SUCCESS)
-            }
         }
     }
 }

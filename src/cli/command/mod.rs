@@ -51,9 +51,6 @@ pub(super) enum Command {
         #[command(subcommand)]
         command: check::CheckCommand,
     },
-    /// Print the completions for a shell, which the package already installs
-    /// for bash, fish and zsh
-    Completions { shell: clap_complete::Shell },
 }
 
 /// refuses to start on a tree with changes in it, listing them under `workdir`

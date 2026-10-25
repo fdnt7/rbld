@@ -22,7 +22,7 @@ signal-hook = { version = "0.4.4", default-features = false, features = [
   "iterator",
 ] }
 termtree = "1.0.0"
-clap_complete = "4.6.9"
+clap_complete = { version = "4.6.9", features = ["unstable-dynamic"] }
 
 [lints.rust]
 unsafe_code = "forbid"
