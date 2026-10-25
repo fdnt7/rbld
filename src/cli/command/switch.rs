@@ -6,25 +6,13 @@ use {
         deploy::{self, Outcome},
         generation::Activation,
         git,
+        message::{self, PLACEHOLDER},
         render::{HEADLINE, NOTE, paint},
         scope::{self, Scope},
-        terminal::{
-            Interrupts, ask, has_terminal, hold_stops, refuse, step, stopped, told_to_stop, warn,
-        },
+        terminal::{Interrupts, has_terminal, hold_stops, refuse, step, stopped, warn},
     },
     git2::Repository,
 };
-
-/// what a placeholder message is told apart by, being what no conventional
-/// commit message has in it
-const PLACEHOLDER: &str = "FIXME_";
-
-/// what a refused message opens again under, above it, where it is seen
-/// first; the reasons are left where the hook gave them
-const REFUSED: &str = "# Refused by the commit-msg hook; its reasons are on the terminal.\n";
-
-/// git's own scissors line, from which down a message is shown and not kept
-const SCISSORS: &str = "# ------------------------ >8 ------------------------";
 
 /// deploys the commit checked out, or the changes on top of it
 ///
@@ -127,7 +115,7 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
 
     let mut message = None;
     let outcome = deploy::deploy(&repo, workdir, &host, asked, &mut |diff| {
-        message = write_message(workdir, scope, diff)?;
+        message = message::write(workdir, &placeholder(scope), &moves(diff))?;
         Ok(message.is_some())
     });
 
@@ -137,7 +125,7 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
             let message = message.unwrap_or_else(|| placeholder(scope));
 
             if !git::amend(workdir, &message)? {
-                let kept = keep_message(&repo, &message)?;
+                let kept = message::keep(&repo, &message)?;
                 warn(&format!(
                     "the commit keeps its placeholder message, as git did not take the one written; it is kept for `git commit --amend --file {kept}`"
                 ));
@@ -156,7 +144,7 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
     match &message {
         // written for nothing, it is kept, so as not to be written again
         Some(message) => {
-            let kept = keep_message(&repo, message)?;
+            let kept = message::keep(&repo, message)?;
             stopped(
                 &headline,
                 &format!("{undone}; the message written is kept in {kept}"),
@@ -202,102 +190,15 @@ fn placeholder(scope: &Scope) -> String {
     format!("{PLACEHOLDER}type({named}): {PLACEHOLDER}desc\n")
 }
 
-/// asks for the message in the editor until the message hook takes one,
-/// handing it back as the hook left it, or nothing where it was given up:
-/// emptied, left as it was offered, the editor failing, or not edited again
-/// once refused
-///
-/// A refusal stops on the terminal, where the hook has just said why, and
-/// asks whether to edit the message again, rather than reopening the editor
-/// at once: an editor that comes straight back reads as a second commit to
-/// write, as in a rebase. Edited again, the message opens as written, with a
-/// line above it saying it was refused.
-fn write_message(workdir: &str, scope: &Scope, diff: &str) -> anyhow::Result<Option<String>> {
-    let mut message = placeholder(scope);
-    let mut refused = false;
-
-    step("writing the commit message");
-
-    loop {
-        // a stop leaves nobody to write it
-        if told_to_stop() {
-            return Ok(None);
-        }
-
-        let Some(edited) = git::edit(workdir, &offer(&message, refused, diff))? else {
-            return Ok(None);
-        };
-        let edited = cleaned(&edited);
-        if edited.is_empty() || edited == cleaned(&message) {
-            return Ok(None);
-        }
-        message = edited;
-
-        let question = if message.contains(PLACEHOLDER) {
-            format!("the message still has the placeholder's {PLACEHOLDER} in it; edit it again?")
-        } else if let Some(taken) = git::check_message(workdir, &message)? {
-            return Ok(Some(taken));
-        } else {
-            "the commit-msg hook refused the message; edit it again?".to_owned()
-        };
-
-        if !ask(&question)? || told_to_stop() {
-            return Ok(None);
-        }
-        refused = true;
-    }
-}
-
-/// what the editor opens on: `message`, with a line above it where it was
-/// refused, and what the deployment moves below the scissors, to write the
-/// message from without it being kept
-fn offer(message: &str, refused: bool, diff: &str) -> String {
+/// what the deployment moves, as the message is written from it, below the
+/// scissors
+fn moves(diff: &str) -> String {
     let diff = diff.trim();
-    let moves = if diff.is_empty() {
-        "nothing is activated: the system already has this generation in place"
+    if diff.is_empty() {
+        "nothing is activated: the system already has this generation in place".to_owned()
     } else {
-        diff
-    };
-    let above = if refused { REFUSED } else { "" };
-
-    format!("{above}{}\n\n{SCISSORS}\n{moves}\n", message.trim_end())
-}
-
-/// what git keeps of a message written in the editor: everything above the
-/// scissors line, without comments, trailing spaces, or blank lines at either
-/// end or more than one in a row, as `git stripspace --strip-comments` has it
-fn cleaned(text: &str) -> String {
-    let mut lines: Vec<&str> = vec![];
-    for line in text.lines() {
-        if line == SCISSORS {
-            break;
-        }
-        if line.starts_with('#') {
-            continue;
-        }
-        let line = line.trim_end();
-        if line.is_empty() && lines.last().is_none_or(|last| last.is_empty()) {
-            continue;
-        }
-        lines.push(line);
+        diff.to_owned()
     }
-    while lines.last().is_some_and(|last| last.is_empty()) {
-        lines.pop();
-    }
-
-    if lines.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", lines.join("\n"))
-    }
-}
-
-/// keeps `message` where git keeps its own, in the repository, handing back
-/// where, for one written but never taken
-fn keep_message(repo: &Repository, message: &str) -> anyhow::Result<String> {
-    let path = repo.path().join("RBLD_EDITMSG");
-    std::fs::write(&path, message)?;
-    Ok(path.display().to_string())
 }
 
 #[cfg(test)]
@@ -326,48 +227,5 @@ mod tests {
             placeholder(&Scope::Repo),
             "FIXME_type(FIXME_scope): FIXME_desc\n"
         );
-    }
-
-    #[test]
-    fn the_diff_sits_below_the_scissors() {
-        let text = offer(
-            &placeholder(&Scope::User("f".into())),
-            false,
-            "ADDED\n[A.] posy-cursors 1.6\n",
-        );
-        let (kept, shown) = text.split_once(SCISSORS).unwrap_or_default();
-
-        assert_eq!(kept, "FIXME_type(f): FIXME_desc\n\n");
-        assert!(shown.contains("[A.] posy-cursors 1.6"));
-    }
-
-    #[test]
-    fn a_refused_message_comes_back_marked_above() {
-        let text = offer(
-            "fix(f): a subject well over the fifty characters allowed\n",
-            true,
-            "",
-        );
-
-        assert!(text.starts_with(
-            "# Refused by the commit-msg hook; its reasons are on the terminal.\nfix(f): a subject well over the fifty characters allowed\n\n"
-        ));
-        assert_eq!(
-            cleaned(&text),
-            "fix(f): a subject well over the fifty characters allowed\n"
-        );
-    }
-
-    #[test]
-    fn cleaning_keeps_what_git_keeps() {
-        assert_eq!(
-            cleaned("\n\nfix(f): x  \n\n\n# a comment\nbody\n\n"),
-            "fix(f): x\n\nbody\n"
-        );
-        assert_eq!(
-            cleaned(&format!("fix(f): x\n{SCISSORS}\nshown only\n")),
-            "fix(f): x\n"
-        );
-        assert_eq!(cleaned("# only a comment\n\n"), "");
     }
 }
