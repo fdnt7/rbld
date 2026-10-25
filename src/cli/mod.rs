@@ -28,23 +28,19 @@ impl Cli {
             Command::Check { command } => match command {
                 CheckCommand::Scope(flake) => command::check::scope::check_scope(&resolve(flake)),
             },
+            // generated from the commands as they are declared, so they cannot
+            // fall behind them
+            Command::Completions { shell } => {
+                clap_complete::generate(
+                    shell,
+                    &mut Self::command(),
+                    "rbld",
+                    &mut std::io::stdout(),
+                );
+                Ok(std::process::ExitCode::SUCCESS)
+            }
         }
     }
-}
-
-/// what `RBLD_COMPLETIONS` names a shell to print rbld's completions for,
-/// which the package does to install them; nothing otherwise
-///
-/// An environment variable rather than a command, which would be offered as
-/// one in the very completions it prints. They are generated from the
-/// commands as declared, so they cannot fall behind them.
-pub fn completions() -> Option<std::process::ExitCode> {
-    let shell = std::env::var("RBLD_COMPLETIONS").ok()?;
-    let Ok(shell) = shell.parse::<clap_complete::Shell>() else {
-        return Some(std::process::ExitCode::FAILURE);
-    };
-    clap_complete::generate(shell, &mut Cli::command(), "rbld", &mut std::io::stdout());
-    Some(std::process::ExitCode::SUCCESS)
 }
 
 /// the flake a command was pointed at, or the error clap would have given had

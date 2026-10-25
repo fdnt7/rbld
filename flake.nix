@@ -61,9 +61,9 @@
             # the system has; dix is rbld's alone
             postInstall = ''
               installShellCompletion --cmd rbld \
-                --bash <(RBLD_COMPLETIONS=bash $out/bin/rbld) \
-                --fish <(RBLD_COMPLETIONS=fish $out/bin/rbld) \
-                --zsh <(RBLD_COMPLETIONS=zsh $out/bin/rbld)
+                --bash <($out/bin/rbld completions bash) \
+                --fish <($out/bin/rbld completions fish) \
+                --zsh <($out/bin/rbld completions zsh)
               wrapProgram $out/bin/rbld --prefix PATH : ${nixpkgs.lib.makeBinPath [ pkgs.dix ]}
             '';
           };
