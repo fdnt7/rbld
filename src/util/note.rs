@@ -7,7 +7,11 @@
 //! facts as trailers in its last paragraph, for `git interpret-trailers` and
 //! for `rbld status` to read back.
 
-use std::{path::Path, process::Command};
+use std::{
+    io::Write as _,
+    path::Path,
+    process::{Command, Stdio},
+};
 
 use {
     crate::util::{
@@ -343,6 +347,8 @@ pub fn push(workdir: &str, remote: &str, notes_ref: &str) -> anyhow::Result<()> 
         return Err(rejected);
     }
 
+    let ours = git(workdir, ["rev-parse", "--verify", notes_ref])?;
+    let theirs = git(workdir, ["rev-parse", "--verify", INCOMING])?;
     let merged = git(
         workdir,
         [
@@ -361,7 +367,103 @@ pub fn push(workdir: &str, remote: &str, notes_ref: &str) -> anyhow::Result<()> 
     git(workdir, ["update-ref", "-d", INCOMING])?;
     merged?;
 
+    // a merge commit is ours to sign; the remote's own tip, fast forwarded
+    // to, is theirs, and signing it over would make it one they do not have
+    let tip = git(workdir, ["rev-parse", "--verify", notes_ref])?;
+    if tip.trim() != theirs.trim()
+        && let Err(e) = sign_tip(workdir, notes_ref)
+    {
+        git(workdir, ["update-ref", notes_ref, ours.trim()])?;
+        return Err(e.context("the merged notes could not be signed, so they were not kept"));
+    }
+
     git(workdir, ["push", "--quiet", remote, notes_ref])?;
+
+    Ok(())
+}
+
+/// makes the commit at the tip of `notes_ref` over, the same but signed, as
+/// git signs a commit here
+///
+/// libgit2 writes notes commits unsigned, and git has no way to sign one of
+/// its own, so `git commit-tree` makes it over, with the same tree, parents,
+/// message, authors and dates: signing with `-S` follows `gpg.format` and
+/// `user.signingKey` as a commit does, and fails where nothing is set up to
+/// sign with. The ref moves only from the commit it was made over from.
+pub fn sign_tip(workdir: &str, notes_ref: &str) -> anyhow::Result<()> {
+    let tip = git(workdir, ["rev-parse", "--verify", notes_ref])?;
+    let tip = tip.trim();
+    let parents = git(workdir, ["rev-list", "--parents", "--max-count=1", tip])?;
+    let message = git(workdir, ["log", "--max-count=1", "--format=%B", tip])?;
+    let who = git(
+        workdir,
+        [
+            "log",
+            "--max-count=1",
+            "--format=%an%n%ae%n%ad%n%cn%n%ce%n%cd",
+            "--date=raw",
+            tip,
+        ],
+    )?;
+    let [
+        author,
+        author_email,
+        author_date,
+        committer,
+        committer_email,
+        committer_date,
+    ] = who.lines().collect::<Vec<_>>()[..]
+    else {
+        bail!("git log: no authorship for {tip}");
+    };
+
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(Path::new(workdir))
+        .args(["commit-tree", "-S"])
+        .env("GIT_AUTHOR_NAME", author)
+        .env("GIT_AUTHOR_EMAIL", author_email)
+        .env("GIT_AUTHOR_DATE", author_date)
+        .env("GIT_COMMITTER_NAME", committer)
+        .env("GIT_COMMITTER_EMAIL", committer_email)
+        .env("GIT_COMMITTER_DATE", committer_date);
+    for parent in parents.split_whitespace().skip(1) {
+        command.args(["-p", parent]);
+    }
+    let mut child = command
+        .arg(format!("{tip}^{{tree}}"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("running git")?;
+    child
+        .stdin
+        .take()
+        .context("git commit-tree: no stdin")?
+        .write_all(message.trim_end().as_bytes())?;
+    let output = child.wait_with_output()?;
+
+    if !output.status.success() {
+        bail!(
+            "git commit-tree: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let signed = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    git(
+        workdir,
+        [
+            "update-ref",
+            "-m",
+            "rbld: sign the note",
+            notes_ref,
+            &signed,
+            tip,
+        ],
+    )?;
 
     Ok(())
 }

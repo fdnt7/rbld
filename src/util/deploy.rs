@@ -230,7 +230,7 @@ impl Deployment {
 
         let notes_ref = note::notes_ref(&host);
 
-        if let Err(e) = self.write(repo, &notes_ref, commit) {
+        if let Err(e) = self.write(repo, workdir, &notes_ref, commit) {
             warn(&format!("the deployment was not recorded: {e:#}"));
             return;
         }
@@ -251,7 +251,13 @@ impl Deployment {
         }
     }
 
-    fn write(self, repo: &Repository, notes_ref: &str, commit: Oid) -> anyhow::Result<()> {
+    fn write(
+        self,
+        repo: &Repository,
+        workdir: &str,
+        notes_ref: &str,
+        commit: Oid,
+    ) -> anyhow::Result<()> {
         let note = Note {
             host: self.host,
             commit: short(repo, commit)?,
@@ -269,6 +275,7 @@ impl Deployment {
             diff: self.diff,
         };
 
+        let before = repo.refname_to_id(notes_ref).ok();
         let signature = repo.signature()?;
         repo.note(
             &signature,
@@ -278,6 +285,18 @@ impl Deployment {
             &note.render(),
             true,
         )?;
+
+        // a note is signed as every commit here is, or it is not kept: the
+        // ref goes back to where it was, and the deployment stands unrecorded
+        if let Err(e) = note::sign_tip(workdir, notes_ref) {
+            match before {
+                Some(before) => {
+                    repo.reference(notes_ref, before, true, "rbld: drop an unsigned note")?;
+                }
+                None => repo.find_reference(notes_ref)?.delete()?,
+            }
+            return Err(e.context("the note could not be signed, so it was not kept"));
+        }
 
         Ok(())
     }
