@@ -90,7 +90,7 @@ pub fn deploy(
     }
 
     let new = Generation::at(&link)?;
-    let decision = Decision::new(asked);
+    let decision = Decision::new(asked, &new)?;
     let replaced = decision.activation.replaces()?;
     let notes_ref = note::notes_ref(host);
 
