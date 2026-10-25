@@ -5,7 +5,10 @@
 //! says comes from the generations themselves, and from dix's diff of them,
 //! the same one nh shows when left to itself, kept without its colours.
 
-use std::process::{Command, ExitStatus};
+use std::{
+    io,
+    process::{Command, ExitStatus},
+};
 
 use {
     crate::util::{
@@ -34,6 +37,9 @@ pub enum Outcome {
 /// the headline for a deployment given up on being told to stop
 const STOPPED: &str = "rbld was told to stop";
 
+/// the headline for a deployment its caller was not ready for
+const NOT_READY: &str = "the commit message was not written";
+
 /// a deployment that has happened, with everything its note will say but the
 /// commit it is written on
 ///
@@ -59,11 +65,17 @@ pub struct Deployment {
 /// An error is only ever one met before anything was activated, so a caller
 /// can treat it as [`Outcome::NotDeployed`]. Once something is, what goes
 /// wrong after is said here and the deployment stands.
+///
+/// `ready` is the caller's last word before anything is activated, given what
+/// moves, which is empty where nothing does: it is asked once the answer is
+/// yes, or once there is found to be nothing to activate, and the deployment
+/// goes no further where it says no.
 pub fn deploy(
     repo: &Repository,
     workdir: &str,
     host: &str,
     asked: Option<Activation>,
+    ready: &mut dyn FnMut(&str) -> anyhow::Result<bool>,
 ) -> anyhow::Result<Outcome> {
     if told_to_stop() {
         return Ok(Outcome::NotDeployed(STOPPED));
@@ -132,9 +144,52 @@ pub fn deploy(
     if new == replaced {
         say(paint(NOTE, already(decision.activation)));
 
+        if !ready("")? {
+            return Ok(Outcome::NotDeployed(NOT_READY));
+        }
         return Ok(Outcome::Deployed(deployment(None, String::new())));
     }
 
+    let diff = compare(&replaced, &new, &decision)?;
+    let verb = decision.activation.verb();
+    let yes = ask(&format!("{verb} to this generation?"))?;
+
+    // a stop that came while the question stood outranks its answer
+    if told_to_stop() {
+        return Ok(Outcome::NotDeployed(STOPPED));
+    }
+
+    if !yes {
+        return Ok(Outcome::NotDeployed("the system was not activated"));
+    }
+
+    if !ready(&strip_str(&diff).to_string())? {
+        return Ok(Outcome::NotDeployed(NOT_READY));
+    }
+
+    step(&format!("activating by {verb}"));
+
+    let activated = activate(decision.activation, &new)?;
+
+    if !activated.success() {
+        // nh says it failed, which is not to say nothing changed: a unit that
+        // would not restart fails the switch after the profile has moved
+        if !decision.activation.reached(&new)? {
+            return Ok(Outcome::NotDeployed("the system was not activated"));
+        }
+
+        warn("nh reported a failure, but the new generation is in place, so it is recorded");
+    }
+
+    Ok(Outcome::Deployed(deployment(
+        Some(decision.activation),
+        strip_str(&diff).to_string(),
+    )))
+}
+
+/// shows what moves from `replaced` to `new`, as dix puts it, and why it is
+/// to be activated as decided, handing back dix's diff as it was shown
+fn compare(replaced: &Generation, new: &Generation, decision: &Decision) -> io::Result<String> {
     step("comparing with the system it replaces");
 
     let diff = Command::new("dix")
@@ -162,35 +217,7 @@ pub fn deploy(
         ));
     }
 
-    let yes = ask(&format!("{verb} to this generation?"))?;
-
-    // a stop that came while the question stood outranks its answer
-    if told_to_stop() {
-        return Ok(Outcome::NotDeployed(STOPPED));
-    }
-
-    if !yes {
-        return Ok(Outcome::NotDeployed("the system was not activated"));
-    }
-
-    step(&format!("activating by {verb}"));
-
-    let activated = activate(decision.activation, &new)?;
-
-    if !activated.success() {
-        // nh says it failed, which is not to say nothing changed: a unit that
-        // would not restart fails the switch after the profile has moved
-        if !decision.activation.reached(&new)? {
-            return Ok(Outcome::NotDeployed("the system was not activated"));
-        }
-
-        warn("nh reported a failure, but the new generation is in place, so it is recorded");
-    }
-
-    Ok(Outcome::Deployed(deployment(
-        Some(decision.activation),
-        strip_str(&diff).to_string(),
-    )))
+    Ok(diff)
 }
 
 /// what is said where the generation is already where `activation` would
@@ -213,12 +240,6 @@ fn activate(activation: Activation, generation: &Generation) -> std::io::Result<
 }
 
 impl Deployment {
-    /// what moved between the generations, as dix put it, without colours;
-    /// empty where nothing was activated
-    pub fn diff(&self) -> &str {
-        &self.diff
-    }
-
     /// writes the note for this deployment on `commit`, and keeps the remote
     /// in step, saying rather than failing where either goes wrong: the system
     /// has moved by now, and a commit undone for want of a note would be the

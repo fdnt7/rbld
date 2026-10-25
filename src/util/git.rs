@@ -165,13 +165,85 @@ pub fn restore(repo: &Repository, target: &Commit<'_>, index: Oid) -> anyhow::Re
     Ok(())
 }
 
-/// opens the editor on head's message, starting from `message`, and amends
-/// head with what comes back, saying whether git took it
+/// opens the editor git would open on `text`, handing back what is left in
+/// it, or nothing where the editor fails, as quitting one without saving
+/// does in some
 ///
-/// Everything from a scissors line in `message` down is shown in the editor
-/// and never kept. The hooks run as on any commit, the message hook being the
-/// one with anything left to check, and git stops where it is refused, or
-/// where the editor leaves it no message, keeping head as it was.
+/// The file is named as git names a commit message's, so an editor that knows
+/// one knows the other and shows it as such, scissors line and all.
+pub fn edit(flake: &str, text: &str) -> anyhow::Result<Option<String>> {
+    let editor = Command::new("git")
+        .arg("-C")
+        .arg(flake)
+        .args(["var", "GIT_EDITOR"])
+        .output()?;
+    if !editor.status.success() {
+        anyhow::bail!(
+            "git var GIT_EDITOR: {}",
+            String::from_utf8_lossy(&editor.stderr).trim()
+        );
+    }
+    let editor = String::from_utf8_lossy(&editor.stdout).trim().to_owned();
+
+    let dir = tempfile::Builder::new().prefix("rbld-").tempdir()?;
+    let path = dir.path().join("COMMIT_EDITMSG");
+    std::fs::write(&path, text)?;
+
+    // run through the shell, as git runs it, the editor being a command line
+    // of its own and not only a program's name
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(format!("{editor} \"$@\""))
+        .arg(&editor)
+        .arg(&path)
+        .current_dir(flake)
+        .status()?;
+
+    if !status.success() {
+        return Ok(None);
+    }
+
+    Ok(Some(std::fs::read_to_string(&path)?))
+}
+
+/// runs the repository's `commit-msg` hook on `message`, as git would on its
+/// way to a commit, handing back the message as the hook leaves it where it
+/// passes, which a hook may have added to, and what it said where it refuses;
+/// a repository without one passes
+///
+/// What the hook says is read back rather than shown, to be put in front of
+/// the message it refused, and so comes without its colours.
+pub fn check_message(flake: &str, message: &str) -> anyhow::Result<Result<String, String>> {
+    let mut file = tempfile::Builder::new()
+        .prefix("rbld-")
+        .suffix(".txt")
+        .tempfile()?;
+    file.write_all(message.as_bytes())?;
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(flake)
+        .args(["hook", "run", "--ignore-missing", "commit-msg", "--"])
+        .arg(file.path())
+        .output()?;
+
+    if output.status.success() {
+        return Ok(Ok(std::fs::read_to_string(file.path())?));
+    }
+
+    let said = [output.stdout, output.stderr]
+        .iter()
+        .map(|bytes| anstream::adapter::strip_str(&String::from_utf8_lossy(bytes)).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(Err(said))
+}
+
+/// gives head `message`, as it stands, saying whether git took it
+///
+/// The hooks are skipped: the changes went through the pre-commit hook before
+/// head was committed, and `message` through the message hook by
+/// [`check_message`]. What is left to refuse it is signing it.
 pub fn amend(flake: &str, message: &str) -> anyhow::Result<bool> {
     let _interrupts = Interrupts::held()?;
 
@@ -187,8 +259,8 @@ pub fn amend(flake: &str, message: &str) -> anyhow::Result<bool> {
         .args([
             "commit",
             "--amend",
-            "--edit",
-            "--cleanup=scissors",
+            "--no-verify",
+            "--cleanup=verbatim",
             "--file",
         ])
         .arg(file.path())
