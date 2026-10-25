@@ -66,17 +66,22 @@ pub struct Note {
 
 impl Note {
     pub fn render(&self) -> String {
-        let done = self.activation.map_or_else(
+        // a deployment that activated nothing says so, and what the commit
+        // builds instead: the generation already running, or already set to
+        // boot next; "already on" read as though it had been deployed before
+        let subject = self.activation.map_or_else(
             || {
-                match self.decided {
-                    Activation::Switch => "already on",
-                    Activation::Boot => "already set to boot",
-                }
-                .to_owned()
+                let what = match self.decided {
+                    Activation::Switch => "running",
+                    Activation::Boot => "set to boot",
+                };
+                format!(
+                    "{}: {} builds what's {what}; nothing to activate",
+                    self.host, self.commit
+                )
             },
-            |activation| format!("{activation} to"),
+            |activation| format!("{}: {activation} to {}", self.host, self.commit),
         );
-        let subject = format!("{}: {done} {}", self.host, self.commit);
 
         let mut trailers = vec![("Host", self.host.clone())];
         trailers.extend(self.from.clone().map(|from| ("From", from)));
@@ -564,7 +569,9 @@ mod tests {
     fn nothing_to_activate_says_so() {
         let text = note(None, "").render();
 
-        assert!(text.starts_with("fw16: already on 90b4f99\n\nHost: fw16\n"));
+        assert!(text.starts_with(
+            "fw16: 90b4f99 builds what's running; nothing to activate\n\nHost: fw16\n"
+        ));
         assert!(trailers(&text).contains(&("Activation", "none")));
     }
 
@@ -576,7 +583,7 @@ mod tests {
         }
         .render();
 
-        assert!(text.starts_with("fw16: already set to boot 90b4f99\n"));
+        assert!(text.starts_with("fw16: 90b4f99 builds what's set to boot; nothing to activate\n"));
         assert!(trailers(&text).contains(&("Activation", "none")));
     }
 

@@ -95,8 +95,10 @@ fn host_tree(
         paint(SCOPE, host)
     };
 
+    // a note says only that nothing was activated, not whether what the
+    // commit builds was running or set to boot
     let done = match record.activation.as_str() {
-        "none" => "already on",
+        "none" => "nothing to activate for",
         "boot" => "boot to",
         _ => "switch to",
     };
