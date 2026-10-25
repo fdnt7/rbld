@@ -208,13 +208,16 @@ fn write_message(workdir: &str, scope: &Scope, diff: &str) -> anyhow::Result<Opt
     let mut message = placeholder(scope);
     let mut complaint: Option<String> = None;
 
+    // said once: the editor takes the terminal straight after, so anything
+    // said between one opening and the next goes unseen, and a refusal is
+    // said in the editor instead, above the message it refused
+    step("writing the commit message");
+
     loop {
         // a stop leaves nobody to write it
         if told_to_stop() {
             return Ok(None);
         }
-
-        step("writing the commit message");
 
         let Some(edited) = git::edit(workdir, &offer(&message, complaint.as_deref(), diff))? else {
             return Ok(None);
@@ -234,7 +237,6 @@ fn write_message(workdir: &str, scope: &Scope, diff: &str) -> anyhow::Result<Opt
             }
         };
 
-        warn("the message was refused; it opens again, with why under it");
         complaint = Some(refusal);
     }
 }
