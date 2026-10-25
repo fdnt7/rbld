@@ -163,8 +163,18 @@ fn gap() -> &'static str {
 /// an interrupt, and the caller is left to undo what it did on the way here
 /// the same way it would for a no.
 pub fn ask(question: &str) -> anyhow::Result<bool> {
+    let yes = key(&format!("{question} [y/N]"))?.is_some_and(|key| key.eq_ignore_ascii_case(&b'y'));
+    say(if yes { "yes" } else { "no" });
+
+    Ok(yes)
+}
+
+/// puts `prompt` and reads a single key as the answer, ctrl-c included, as
+/// [`ask`] does; nothing where there is no key to read, the terminal having
+/// gone
+pub fn key(prompt: &str) -> anyhow::Result<Option<u8>> {
     let mut stderr = anstream::stderr();
-    let _ = write!(stderr, "{}{} [y/N] ", gap(), paint(HEADLINE, question));
+    let _ = write!(stderr, "{}{} ", gap(), paint(HEADLINE, prompt));
     let _ = stderr.flush();
 
     let mut key = [0];
@@ -173,10 +183,7 @@ pub fn ask(question: &str) -> anyhow::Result<bool> {
         std::io::stdin().read(&mut key)?
     };
 
-    let yes = read == 1 && key[0].eq_ignore_ascii_case(&b'y');
-    say(if yes { "yes" } else { "no" });
-
-    Ok(yes)
+    Ok((read == 1).then_some(key[0]))
 }
 
 /// what becomes of a ctrl-c while a borrowed program is running, for as long

@@ -115,7 +115,12 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
 
     let mut message = None;
     let outcome = deploy::deploy(&repo, workdir, &host, asked, &mut |diff| {
-        message = message::write(workdir, &placeholder(scope), &moves(diff))?;
+        message = message::write(
+            workdir,
+            &placeholder(scope),
+            &moves(diff),
+            "undo the commit",
+        )?;
         Ok(message.is_some())
     });
 
