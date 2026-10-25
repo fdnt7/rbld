@@ -1,4 +1,5 @@
 pub(super) mod check;
+pub(super) mod status;
 pub(super) mod switch;
 pub(super) mod update;
 
@@ -31,6 +32,11 @@ pub(super) enum Command {
     Update {
         #[command(flatten)]
         asked: Asked,
+        #[command(flatten)]
+        flake: Flake,
+    },
+    /// Show each host's latest deployment, fetching the notes first
+    Status {
         #[command(flatten)]
         flake: Flake,
     },

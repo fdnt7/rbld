@@ -23,6 +23,7 @@ impl Cli {
             Command::Update { asked, flake } => {
                 command::update::update(&resolve(flake), asked.activation())
             }
+            Command::Status { flake } => command::status::status(&resolve(flake)),
             Command::Check { command } => match command {
                 CheckCommand::Scope(flake) => command::check::scope::check_scope(&resolve(flake)),
             },

@@ -73,6 +73,11 @@ pub fn rooted(root: &str) -> Tree<String> {
     Tree::new(paint(DIR, if root.is_empty() { "/" } else { root })).with_glyphs(branches())
 }
 
+/// a tree waiting for what sits under `root`, which is shown as it is given
+pub fn headed(root: String) -> Tree<String> {
+    Tree::new(root).with_glyphs(branches())
+}
+
 /// a file path, with the directories leading to it in bold
 ///
 /// `base` styles the whole of it, so a caller can mark a file out without

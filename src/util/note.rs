@@ -124,23 +124,31 @@ pub fn trailers(text: &str) -> Vec<(&str, &str)> {
     parsed.unwrap_or_default()
 }
 
-/// the commit whose note under `notes_ref` names `generation`, being the
-/// commit that generation was deployed from; the latest such deployment, where
-/// the same generation came of more than one
-pub fn deployed_from(
-    repo: &Repository,
-    notes_ref: &str,
-    generation: &Generation,
-) -> anyhow::Result<Option<Oid>> {
+/// a note read back: the commit it is on, and what its trailers say of the
+/// deployment
+pub struct Record {
+    pub commit: Oid,
+    /// `switch`, `boot`, or `none` where nothing was activated
+    pub activation: String,
+    pub generation: String,
+    /// when the deployment was made; the earliest there is, for a note that
+    /// does not say, so that it is never taken for the latest
+    pub rebuilt_at: DateTime<FixedOffset>,
+}
+
+/// every note under `notes_ref` that rbld wrote, being every one with the
+/// trailers to read back; none where the ref is not there
+///
+/// A note with no trailers, as the ones written before rbld are, says nothing
+/// that can be read back, and is passed over.
+pub fn records(repo: &Repository, notes_ref: &str) -> anyhow::Result<Vec<Record>> {
     let notes = match repo.notes(Some(notes_ref)) {
         Ok(notes) => notes,
-        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(e) if e.code() == git2::ErrorCode::NotFound => return Ok(vec![]),
         Err(e) => return Err(e.into()),
     };
 
-    let wanted = generation.to_string();
-    let mut latest: Option<(DateTime<FixedOffset>, Oid)> = None;
-
+    let mut records = vec![];
     for entry in notes {
         let (blob, commit) = entry?;
         let blob = repo.find_blob(blob)?;
@@ -153,25 +161,130 @@ pub fn deployed_from(
             trailers
                 .iter()
                 .find(|(key, _)| *key == name)
-                .map(|(_, value)| *value)
+                .map(|(_, value)| (*value).to_owned())
         };
 
-        if field("Generation") != Some(&wanted) {
+        let Some(generation) = field("Generation") else {
             continue;
-        }
+        };
 
-        // a note without a time to it still names the generation, and is
-        // taken over nothing at all
-        let at = field("Rebuilt-at")
-            .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
-            .unwrap_or_default();
-
-        if latest.is_none_or(|(seen, _)| at > seen) {
-            latest = Some((at, commit));
-        }
+        records.push(Record {
+            commit,
+            activation: field("Activation").unwrap_or_else(|| "none".to_owned()),
+            generation,
+            rebuilt_at: field("Rebuilt-at")
+                .and_then(|at| DateTime::parse_from_rfc3339(&at).ok())
+                .unwrap_or_default(),
+        });
     }
 
-    Ok(latest.map(|(_, commit)| commit))
+    Ok(records)
+}
+
+/// the latest deployment recorded under `notes_ref`, or none where there is
+/// none rbld can read
+pub fn latest(repo: &Repository, notes_ref: &str) -> anyhow::Result<Option<Record>> {
+    Ok(records(repo, notes_ref)?
+        .into_iter()
+        .max_by_key(|record| record.rebuilt_at))
+}
+
+/// the commit whose note under `notes_ref` names `generation`, being the
+/// commit that generation was deployed from; the latest such deployment, where
+/// the same generation came of more than one
+pub fn deployed_from(
+    repo: &Repository,
+    notes_ref: &str,
+    generation: &Generation,
+) -> anyhow::Result<Option<Oid>> {
+    let wanted = generation.to_string();
+
+    Ok(records(repo, notes_ref)?
+        .into_iter()
+        .filter(|record| record.generation == wanted)
+        .max_by_key(|record| record.rebuilt_at)
+        .map(|record| record.commit))
+}
+
+/// the hosts with a notes ref here, by name, in order
+pub fn hosts(repo: &Repository) -> anyhow::Result<Vec<String>> {
+    let prefix = format!("{NOTES_REF_PREFIX}/");
+    let mut hosts = vec![];
+
+    for reference in repo.references_glob(&format!("{prefix}*"))? {
+        if let Some(host) = reference?
+            .name()
+            .ok()
+            .and_then(|name| name.strip_prefix(&prefix))
+        {
+            hosts.push(host.to_owned());
+        }
+    }
+    hosts.sort();
+
+    Ok(hosts)
+}
+
+/// a host's notes ref that a fetch left as it was
+pub struct Kept {
+    pub host: String,
+    /// whether the remote only lacks notes this one has, rather than having
+    /// notes of its own besides
+    pub ahead: bool,
+}
+
+/// brings every host's notes ref up to `remote`'s, as far as each fast
+/// forwards, handing back the ones it left as they were
+///
+/// Never by force: a ref the remote does not fast forward has notes here the
+/// remote lacks, such as ones not yet pushed, and they are worth more than a
+/// view of the remote's. The next deployment on that host pushes them, and
+/// merges in what the remote has where the two diverged.
+pub fn fetch_all(repo: &Repository, workdir: &str, remote: &str) -> anyhow::Result<Vec<Kept>> {
+    let refspec = format!("{NOTES_REF_PREFIX}/*:{NOTES_REF_PREFIX}/*");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(Path::new(workdir))
+        .args(["fetch", "--porcelain", remote, &refspec])
+        .output()
+        .context("running git")?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let prefix = format!("{NOTES_REF_PREFIX}/");
+    let mut kept = vec![];
+
+    // a refusal is a line flagged `!`, giving what is here and what the
+    // remote has, in that order, before the ref
+    for line in stdout.lines() {
+        let Some(rest) = line.strip_prefix("! ") else {
+            continue;
+        };
+        let fields: Vec<&str> = rest.split_whitespace().collect();
+        let [ours, theirs, name] = fields[..] else {
+            continue;
+        };
+        let Some(host) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+
+        let ahead = match (Oid::from_str(ours), Oid::from_str(theirs)) {
+            (Ok(ours), Ok(theirs)) => repo.graph_descendant_of(ours, theirs).unwrap_or(false),
+            _ => false,
+        };
+        kept.push(Kept {
+            host: host.to_owned(),
+            ahead,
+        });
+    }
+
+    if !output.status.success() && kept.is_empty() {
+        bail!(
+            "git fetch: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(kept)
 }
 
 /// the remote the notes are kept in step with: the one the branch being
