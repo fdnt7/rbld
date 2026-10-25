@@ -50,6 +50,10 @@ pub struct Note {
     /// how the generation was activated, or nothing where it was already the
     /// one the activation would have left in place
     pub activation: Option<Activation>,
+    /// the activation decided on, which, where nothing was activated, says
+    /// where the generation already stood: running for a switch, set to
+    /// boot next for a boot
+    pub decided: Activation,
     pub reasons: Vec<String>,
     /// the units of the graphical session the activation restarted or
     /// stopped, kept to look back on should one of them come back wrong
@@ -63,7 +67,13 @@ pub struct Note {
 impl Note {
     pub fn render(&self) -> String {
         let done = self.activation.map_or_else(
-            || "already on".to_owned(),
+            || {
+                match self.decided {
+                    Activation::Switch => "already on",
+                    Activation::Boot => "already set to boot",
+                }
+                .to_owned()
+            },
             |activation| format!("{activation} to"),
         );
         let subject = format!("{}: {done} {}", self.host, self.commit);
@@ -517,6 +527,7 @@ mod tests {
             commit: "90b4f99".into(),
             from: Some("c5a728e".into()),
             activation,
+            decided: activation.unwrap_or(Activation::Switch),
             reasons: vec!["asked for with --boot".into()],
             watched: vec![Watched {
                 change: Change::Restart,
@@ -554,6 +565,18 @@ mod tests {
         let text = note(None, "").render();
 
         assert!(text.starts_with("fw16: already on 90b4f99\n\nHost: fw16\n"));
+        assert!(trailers(&text).contains(&("Activation", "none")));
+    }
+
+    #[test]
+    fn a_boot_already_set_says_so() {
+        let text = Note {
+            decided: Activation::Boot,
+            ..note(None, "")
+        }
+        .render();
+
+        assert!(text.starts_with("fw16: already set to boot 90b4f99\n"));
         assert!(trailers(&text).contains(&("Activation", "none")));
     }
 

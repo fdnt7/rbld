@@ -46,6 +46,7 @@ pub struct Deployment {
     /// how the generation was activated, or nothing where there was nothing
     /// to activate
     activation: Option<Activation>,
+    decided: Activation,
     reasons: Vec<String>,
     watched: Vec<Watched>,
     generation: Generation,
@@ -113,6 +114,7 @@ pub fn deploy(
         host: host.to_owned(),
         from,
         activation,
+        decided: decision.activation,
         reasons: if activation.is_some() {
             decision.reasons.clone()
         } else {
@@ -128,10 +130,7 @@ pub fn deploy(
     };
 
     if new == replaced {
-        say(paint(
-            NOTE,
-            "the system is already this generation; there is nothing to activate",
-        ));
+        say(paint(NOTE, already(decision.activation)));
 
         return Ok(Outcome::Deployed(deployment(None, String::new())));
     }
@@ -192,6 +191,18 @@ pub fn deploy(
         Some(decision.activation),
         strip_str(&diff).to_string(),
     )))
+}
+
+/// what is said where the generation is already where `activation` would
+/// leave it: what a boot replaces is the generation set to boot next, which a
+/// deployment before this one may have left there unbooted
+const fn already(activation: Activation) -> &'static str {
+    match activation {
+        Activation::Switch => "the system is already this generation; there is nothing to activate",
+        Activation::Boot => {
+            "the system is already set to boot this generation; there is nothing to activate"
+        }
+    }
 }
 
 fn activate(activation: Activation, generation: &Generation) -> std::io::Result<ExitStatus> {
@@ -268,6 +279,7 @@ impl Deployment {
                 .map(|from| short(repo, from))
                 .transpose()?,
             activation: self.activation,
+            decided: self.decided,
             reasons: self.reasons,
             watched: self.watched,
             generation: self.generation,
