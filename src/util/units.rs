@@ -330,6 +330,12 @@ fn units(dir: &Path) -> io::Result<BTreeSet<String>> {
 
 /// a unit's file followed by its drop-ins, in the order systemd reads them,
 /// or nothing where the directory has no file for it
+///
+/// An alias is a link to the file of the unit it names, beside it, and
+/// systemd applies that unit's drop-ins to it as well as its own: NixOS
+/// marks a packaged unit in a drop-in of its own name, so the display
+/// manager's `X-RestartIfChanged` is in `plasmalogin.service.d` and not
+/// in `display-manager.service.d`.
 fn unit(dir: &Path, name: &str) -> io::Result<Option<String>> {
     let mut text = match std::fs::read_to_string(dir.join(name)) {
         Ok(text) => text,
@@ -339,21 +345,37 @@ fn unit(dir: &Path, name: &str) -> io::Result<Option<String>> {
         Err(e) => return Err(e),
     };
 
-    let drop_ins = dir.join(format!("{name}.d"));
-    if let Ok(entries) = std::fs::read_dir(&drop_ins) {
-        let mut confs: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "conf"))
-            .collect();
-        confs.sort();
-        for conf in confs {
-            text.push('\n');
-            text.push_str(&std::fs::read_to_string(conf)?);
+    let mut confs: Vec<PathBuf> = vec![];
+    for named in names_of(dir, name) {
+        if let Ok(entries) = std::fs::read_dir(dir.join(format!("{named}.d"))) {
+            confs.extend(
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "conf")),
+            );
         }
+    }
+    // systemd reads the drop-ins of every name together, by file name
+    confs.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    for conf in confs {
+        text.push('\n');
+        text.push_str(&std::fs::read_to_string(conf)?);
     }
 
     Ok(Some(text))
+}
+
+/// `name`, and where it is an alias, the name of the unit it links to:
+/// a link to a bare file name beside it, where a masked unit links to
+/// /dev/null and any other unit into the store
+fn names_of(dir: &Path, name: &str) -> Vec<String> {
+    let target = std::fs::read_link(dir.join(name))
+        .ok()
+        .and_then(|target| target.to_str().map(str::to_owned))
+        .filter(|target| !target.contains('/') && target != name);
+
+    std::iter::once(name.to_owned()).chain(target).collect()
 }
 
 /// whether a changed unit is restarted for it, rather than reloaded or left
@@ -423,6 +445,25 @@ mod tests {
         assert!(is_restarted(
             "[Unit]\nX-RestartIfChanged=false\n\n[Unit]\nX-RestartIfChanged=true\n"
         ));
+    }
+
+    #[test]
+    fn an_alias_takes_the_marks_of_the_unit_it_names() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let (old, new) = (tmp.path().join("old"), tmp.path().join("new"));
+        for (dir, text) in [(&old, "a"), (&new, "b")] {
+            std::fs::create_dir_all(dir.join("plasmalogin.service.d")).expect("dirs");
+            std::fs::write(dir.join("plasmalogin.service"), text).expect("unit");
+            std::fs::write(
+                dir.join("plasmalogin.service.d/overrides.conf"),
+                "[Unit]\nX-RestartIfChanged=false",
+            )
+            .expect("drop-in");
+            std::os::unix::fs::symlink("plasmalogin.service", dir.join("display-manager.service"))
+                .expect("alias");
+        }
+
+        assert_eq!(changes(&old, &new).expect("changes"), BTreeMap::new());
     }
 
     #[test]
