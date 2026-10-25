@@ -10,7 +10,10 @@
 use std::{path::Path, process::Command};
 
 use {
-    crate::util::generation::{Activation, Generation},
+    crate::util::{
+        generation::{Activation, Generation},
+        units::Watched,
+    },
     anyhow::{Context as _, bail},
     chrono::{DateTime, FixedOffset, SecondsFormat},
     git2::{Oid, Repository},
@@ -44,6 +47,9 @@ pub struct Note {
     /// one the activation would have left in place
     pub activation: Option<Activation>,
     pub reasons: Vec<String>,
+    /// the units of the graphical session the activation restarted or
+    /// stopped, kept to look back on should one of them come back wrong
+    pub watched: Vec<Watched>,
     pub generation: Generation,
     pub rebuilt_at: DateTime<FixedOffset>,
     /// what moved between the generations, as dix put it
@@ -68,6 +74,11 @@ impl Note {
             self.reasons
                 .iter()
                 .map(|reason| ("Activation-reason", reason.clone())),
+        );
+        trailers.extend(
+            self.watched
+                .iter()
+                .map(|watched| (watched.change.done(), watched.unit.clone())),
         );
         trailers.push(("Generation", self.generation.to_string()));
         // whole seconds, with the offset spelled out rather than `Z`, as
@@ -283,7 +294,7 @@ fn git<const N: usize>(workdir: &str, args: [&str; N]) -> anyhow::Result<String>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, crate::util::units::Change};
 
     fn note(activation: Option<Activation>, diff: &str) -> Note {
         Note {
@@ -292,6 +303,10 @@ mod tests {
             from: Some("c5a728e".into()),
             activation,
             reasons: vec!["asked for with --boot".into()],
+            watched: vec![Watched {
+                change: Change::Restart,
+                unit: "wpaperd.service".into(),
+            }],
             generation: Generation::at(Path::new("/")).unwrap_or_else(|_| unreachable!()),
             rebuilt_at: DateTime::parse_from_rfc3339("2026-10-21T21:30:00+07:00")
                 .unwrap_or_default(),
@@ -312,6 +327,7 @@ mod tests {
                 ("From", "c5a728e"),
                 ("Activation", "boot"),
                 ("Activation-reason", "asked for with --boot"),
+                ("Restarted", "wpaperd.service"),
                 ("Generation", "/"),
                 ("Rebuilt-at", "2026-10-21T21:30:00+07:00"),
             ]

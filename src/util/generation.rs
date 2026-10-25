@@ -6,7 +6,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde_json::{Map, Value};
+use {
+    crate::util::units,
+    serde_json::{Map, Value},
+};
 
 /// the generation the machine is running
 const RUNNING: &str = "/run/current-system";
@@ -178,29 +181,40 @@ impl fmt::Display for Activation {
 pub struct Decision {
     pub activation: Activation,
     pub reasons: Vec<String>,
+    /// the units of the graphical session a switch restarts or stops, which
+    /// decide nothing but are said and recorded; none for a boot
+    pub watched: Vec<units::Watched>,
 }
 
 impl Decision {
     /// what was asked for on the command line, else a boot where `new` needs
-    /// a reboot to be taken up, and a switch otherwise
-    pub fn new(asked: Option<Activation>, new: &Generation) -> io::Result<Self> {
-        if let Some(activation) = asked {
-            return Ok(Self {
-                activation,
-                reasons: vec![format!("asked for with --{activation}")],
-            });
-        }
+    /// a reboot to be taken up, or where switching to it would restart
+    /// something that has to stay up, and a switch otherwise
+    pub fn new(asked: Option<Activation>, new: &Generation) -> anyhow::Result<Self> {
+        let running = Generation::running()?;
+        let restarts = units::restarts(new, &running)?;
 
-        let reasons = new.reboot_reasons(&Generation::running()?)?;
-        let activation = if reasons.is_empty() {
-            Activation::Switch
+        let (activation, reasons) = if let Some(activation) = asked {
+            (activation, vec![format!("asked for with --{activation}")])
         } else {
-            Activation::Boot
+            let mut reasons = new.reboot_reasons(&running)?;
+            reasons.extend(restarts.reasons);
+            let activation = if reasons.is_empty() {
+                Activation::Switch
+            } else {
+                Activation::Boot
+            };
+            (activation, reasons)
         };
 
         Ok(Self {
             activation,
             reasons,
+            watched: if activation == Activation::Switch {
+                restarts.watched
+            } else {
+                vec![]
+            },
         })
     }
 }

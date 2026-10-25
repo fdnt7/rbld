@@ -13,6 +13,7 @@ use {
         note::{self, Note},
         render::{NOTE, paint},
         terminal::{ask, done, say, step, told_to_stop, warn},
+        units::Watched,
     },
     anstream::adapter::strip_str,
     chrono::Local,
@@ -46,6 +47,7 @@ pub struct Deployment {
     /// to activate
     activation: Option<Activation>,
     reasons: Vec<String>,
+    watched: Vec<Watched>,
     generation: Generation,
     diff: String,
 }
@@ -116,6 +118,11 @@ pub fn deploy(
         } else {
             vec![]
         },
+        watched: if activation.is_some() {
+            decision.watched.clone()
+        } else {
+            vec![]
+        },
         generation: new.clone(),
         diff,
     };
@@ -144,6 +151,16 @@ pub fn deploy(
     let verb = decision.activation.verb();
     for reason in &decision.reasons {
         say(paint(NOTE, &format!("{verb}, because {reason}")));
+    }
+    for watched in &decision.watched {
+        say(paint(
+            NOTE,
+            &format!(
+                "{verb}ing {}s {} too, which the graphical session is made of",
+                watched.change.verb(),
+                watched.unit
+            ),
+        ));
     }
 
     let yes = ask(&format!("{verb} to this generation?"))?;
@@ -246,6 +263,7 @@ impl Deployment {
                 .transpose()?,
             activation: self.activation,
             reasons: self.reasons,
+            watched: self.watched,
             generation: self.generation,
             rebuilt_at: Local::now().fixed_offset(),
             diff: self.diff,
