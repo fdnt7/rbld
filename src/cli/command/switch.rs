@@ -6,7 +6,7 @@ use {
         deploy::{self, Outcome},
         generation::Activation,
         git,
-        message::{self, PLACEHOLDER},
+        message::{self, For, GaveUp, PLACEHOLDER},
         render::{HEADLINE, NOTE, paint},
         scope::{self, Scope},
         terminal::{Interrupts, has_terminal, hold_stops, refuse, step, stopped, warn},
@@ -113,15 +113,15 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
     // terminal, and we stay to put things back after it
     let _interrupts = Interrupts::held()?;
 
+    // a message kept from a switch that did not go through is written
+    // from, rather than written again
+    let kept = message::kept(&repo, For::Switch);
+    let start = kept.clone().unwrap_or_else(|| placeholder(scope));
     let mut message = None;
     let mut gave_up = None;
     let outcome = deploy::deploy(&repo, workdir, &host, asked, &mut |diff| {
-        match message::write(
-            workdir,
-            &placeholder(scope),
-            &moves(diff),
-            "undo the commit",
-        )? {
+        let moved = moves(diff);
+        match message::write(workdir, &start, &moved, "undo the commit", kept.is_some())? {
             Ok(written) => message = Some(written),
             Err(why) => gave_up = Some(why),
         }
@@ -133,8 +133,10 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
             // every deployment that gets here was given a message first
             let message = message.unwrap_or_else(|| placeholder(scope));
 
-            if !git::amend(workdir, &message)? {
-                let kept = message::keep(&repo, &message)?;
+            if git::amend(workdir, &message)? {
+                message::forget(&repo, For::Switch);
+            } else {
+                let kept = message::keep(&repo, For::Switch, &message)?;
                 warn(&format!(
                     "the commit keeps its placeholder message, as git did not take the one written; it is kept for `git commit --amend --file {kept}`"
                 ));
@@ -144,9 +146,13 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
             deployment.record(&repo, workdir, commit.id());
             return Ok(ExitCode::SUCCESS);
         }
-        // a message given up says how, rather than only that it was
+        // a message given up says how, rather than only that it was; one
+        // emptied is let go of, kept or not
         Ok(Outcome::NotDeployed(headline)) => {
-            gave_up.map_or(headline, message::GaveUp::why).to_owned()
+            if gave_up == Some(GaveUp::Emptied) {
+                message::forget(&repo, For::Switch);
+            }
+            gave_up.map_or(headline, GaveUp::why).to_owned()
         }
         Err(e) => format!("{e:#}"),
     };
@@ -169,10 +175,10 @@ fn undo(
     let undone = "the commit is undone and the changes are back as they were found";
     match message {
         Some(message) => {
-            let kept = message::keep(repo, message)?;
+            message::keep(repo, For::Switch, message)?;
             stopped(
                 headline,
-                &format!("{undone}; the message written is kept in {kept}"),
+                &format!("{undone}; the message written is kept, for the next switch to open on"),
             );
         }
         None => stopped(headline, undone),

@@ -19,6 +19,9 @@ pub const PLACEHOLDER: &str = "FIXME_";
 /// first; the reasons are left where the hook gave them
 const REFUSED: &str = "# Refused by the commit-msg hook; its reasons are on the terminal.\n";
 
+/// what a kept message opens under, above it
+const KEPT: &str = "# Kept from a switch that did not go through: save it as it is to use it,\n# or empty it to give up.\n";
+
 /// git's own scissors line, from which down a message is shown and not kept
 const SCISSORS: &str = "# ------------------------ >8 ------------------------";
 
@@ -38,14 +41,20 @@ const SCISSORS: &str = "# ------------------------ >8 ------------------------";
 /// There is no keeping a message the hook refused, a placeholder included:
 /// a commit message is written while the change is fresh, and one that turns
 /// out wrong later is for `rbld reword`, not one never written.
+///
+/// `start` may be one [`kept`] from a commit that never took it, which opens
+/// with a line above it saying so; saved as it is, it is used, being a
+/// message already written, and emptied, it is given up.
 pub fn write(
     workdir: &str,
     start: &str,
     below: &str,
     quit: &str,
+    was_kept: bool,
 ) -> anyhow::Result<Result<String, GaveUp>> {
     let mut message = start.to_owned();
     let mut refused = false;
+    let mut above = if was_kept { KEPT } else { "" };
 
     step("writing the commit message");
 
@@ -55,14 +64,17 @@ pub fn write(
             return Ok(Err(GaveUp::Stopped));
         }
 
-        let Some(edited) = git::edit(workdir, &offer(&message, refused, below))? else {
+        let Some(edited) = git::edit(workdir, &offer(&message, above, below))? else {
             return Ok(Err(GaveUp::EditorFailed));
         };
         let edited = cleaned(&edited);
         if edited.is_empty() {
             return Ok(Err(GaveUp::Emptied));
         }
-        if edited == cleaned(&message) {
+        // a kept message saved as it is is used; anything else saved as it
+        // was offered is given up
+        let used_as_kept = above == KEPT && !refused;
+        if edited == cleaned(&message) && !used_as_kept {
             return Ok(Err(GaveUp::Unchanged));
         }
         message = edited;
@@ -99,6 +111,7 @@ pub fn write(
             return Ok(Err(GaveUp::NotEditedAgain));
         }
         refused = true;
+        above = REFUSED;
     }
 }
 
@@ -141,12 +154,10 @@ const fn choice(key: u8) -> Option<bool> {
     }
 }
 
-/// what the editor opens on: `message`, with a line above it where it was
-/// refused, and `below` under the scissors, to write the message from
-/// without it being kept
-fn offer(message: &str, refused: bool, below: &str) -> String {
-    let above = if refused { REFUSED } else { "" };
-
+/// what the editor opens on: `message`, with `above` above it, a line saying
+/// where it came from where it needs saying, and `below` under the scissors,
+/// to write the message from without it being kept
+fn offer(message: &str, above: &str, below: &str) -> String {
     format!(
         "{above}{}\n\n{SCISSORS}\n{}\n",
         message.trim_end(),
@@ -183,12 +194,43 @@ fn cleaned(text: &str) -> String {
     }
 }
 
+/// which command a message was written for, each keeping its own, so that
+/// one left by a reword is never offered for a switch's changes
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum For {
+    Switch,
+    Reword,
+}
+
+impl For {
+    const fn file(self) -> &'static str {
+        match self {
+            Self::Switch => "RBLD_EDITMSG",
+            Self::Reword => "RBLD_REWORDMSG",
+        }
+    }
+}
+
 /// keeps `message` where git keeps its own, in the repository, handing back
 /// where, for one written but never taken
-pub fn keep(repo: &Repository, message: &str) -> anyhow::Result<String> {
-    let path = repo.path().join("RBLD_EDITMSG");
+pub fn keep(repo: &Repository, command: For, message: &str) -> anyhow::Result<String> {
+    let path = repo.path().join(command.file());
     std::fs::write(&path, message)?;
     Ok(path.display().to_string())
+}
+
+/// the message [`keep`] last kept for `command`, if any, to be written from
+/// rather than written again
+pub fn kept(repo: &Repository, command: For) -> Option<String> {
+    std::fs::read_to_string(repo.path().join(command.file()))
+        .ok()
+        .filter(|message| !message.trim().is_empty())
+}
+
+/// lets go of what [`keep`] kept for `command`, a commit having taken it or
+/// it having been given up; one already gone is nothing to report
+pub fn forget(repo: &Repository, command: For) {
+    let _ = std::fs::remove_file(repo.path().join(command.file()));
 }
 
 #[cfg(test)]
@@ -199,7 +241,7 @@ mod tests {
     fn the_diff_sits_below_the_scissors() {
         let text = offer(
             "FIXME_type(f): FIXME_desc\n",
-            false,
+            "",
             "ADDED\n[A.] posy-cursors 1.6\n",
         );
         let (kept, shown) = text.split_once(SCISSORS).unwrap_or_default();
@@ -212,7 +254,7 @@ mod tests {
     fn a_refused_message_comes_back_marked_above() {
         let text = offer(
             "fix(f): a subject well over the fifty characters allowed\n",
-            true,
+            REFUSED,
             "",
         );
 

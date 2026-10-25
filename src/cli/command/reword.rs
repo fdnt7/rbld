@@ -42,7 +42,13 @@ pub(in crate::cli) fn reword(flake: &str) -> anyhow::Result<ExitCode> {
 
     let current = head.message().unwrap_or_default().to_owned();
     let below = git::stat(workdir)?;
-    let message = match message::write(workdir, &current, &below, "leave the commit as it was")? {
+    let message = match message::write(
+        workdir,
+        &current,
+        &below,
+        "leave the commit as it was",
+        false,
+    )? {
         Ok(message) => message,
         Err(why) => {
             stopped(why.why(), "the commit is as it was");
@@ -53,7 +59,7 @@ pub(in crate::cli) fn reword(flake: &str) -> anyhow::Result<ExitCode> {
     let _interrupts = Interrupts::held()?;
 
     if !git::reword(workdir, &message)? {
-        let kept = message::keep(&repo, &message)?;
+        let kept = message::keep(&repo, message::For::Reword, &message)?;
         stopped(
             "git did not take the message",
             &format!("the commit is as it was; the message is kept in {kept}"),
