@@ -11,7 +11,7 @@ use {
         scope::{self, Scope},
         terminal::{Interrupts, has_terminal, hold_stops, refuse, step, stopped, warn},
     },
-    git2::Repository,
+    git2::{Commit, Oid, Repository},
 };
 
 /// deploys the commit checked out, or the changes on top of it
@@ -114,13 +114,17 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
     let _interrupts = Interrupts::held()?;
 
     let mut message = None;
+    let mut gave_up = None;
     let outcome = deploy::deploy(&repo, workdir, &host, asked, &mut |diff| {
-        message = message::write(
+        match message::write(
             workdir,
             &placeholder(scope),
             &moves(diff),
             "undo the commit",
-        )?;
+        )? {
+            Ok(written) => message = Some(written),
+            Err(why) => gave_up = Some(why),
+        }
         Ok(message.is_some())
     });
 
@@ -140,25 +144,41 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
             deployment.record(&repo, workdir, commit.id());
             return Ok(ExitCode::SUCCESS);
         }
-        Ok(Outcome::NotDeployed(headline)) => headline.to_owned(),
+        // a message given up says how, rather than only that it was
+        Ok(Outcome::NotDeployed(headline)) => {
+            gave_up.map_or(headline, message::GaveUp::why).to_owned()
+        }
         Err(e) => format!("{e:#}"),
     };
 
-    git::restore(&repo, &old_head, old_index)?;
+    undo(&repo, &old_head, old_index, &headline, message.as_deref())?;
+    Ok(ExitCode::FAILURE)
+}
+
+/// puts the commit and the index back as they were found, saying why
+/// under `headline`, and keeps `message` where one was written for nothing,
+/// so as not to be written again
+fn undo(
+    repo: &Repository,
+    old_head: &Commit<'_>,
+    old_index: Oid,
+    headline: &str,
+    message: Option<&str>,
+) -> anyhow::Result<()> {
+    git::restore(repo, old_head, old_index)?;
     let undone = "the commit is undone and the changes are back as they were found";
-    match &message {
-        // written for nothing, it is kept, so as not to be written again
+    match message {
         Some(message) => {
-            let kept = message::keep(&repo, message)?;
+            let kept = message::keep(repo, message)?;
             stopped(
-                &headline,
+                headline,
                 &format!("{undone}; the message written is kept in {kept}"),
             );
         }
-        None => stopped(&headline, undone),
+        None => stopped(headline, undone),
     }
 
-    Ok(ExitCode::FAILURE)
+    Ok(())
 }
 
 fn switch_clean(

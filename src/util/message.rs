@@ -43,7 +43,7 @@ pub fn write(
     start: &str,
     below: &str,
     quit: &str,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<Result<String, GaveUp>> {
     let mut message = start.to_owned();
     let mut refused = false;
 
@@ -52,22 +52,25 @@ pub fn write(
     loop {
         // a stop leaves nobody to write it
         if told_to_stop() {
-            return Ok(None);
+            return Ok(Err(GaveUp::Stopped));
         }
 
         let Some(edited) = git::edit(workdir, &offer(&message, refused, below))? else {
-            return Ok(None);
+            return Ok(Err(GaveUp::EditorFailed));
         };
         let edited = cleaned(&edited);
-        if edited.is_empty() || edited == cleaned(&message) {
-            return Ok(None);
+        if edited.is_empty() {
+            return Ok(Err(GaveUp::Emptied));
+        }
+        if edited == cleaned(&message) {
+            return Ok(Err(GaveUp::Unchanged));
         }
         message = edited;
 
         let refusal = if message.contains(PLACEHOLDER) {
             format!("the message still has the placeholder's {PLACEHOLDER} in it")
         } else if let Some(taken) = git::check_message(workdir, &message)? {
-            return Ok(Some(taken));
+            return Ok(Ok(taken));
         } else {
             "the commit-msg hook refused the message".to_owned()
         };
@@ -89,10 +92,42 @@ pub fn write(
                 }
             }
         };
-        if !edit || told_to_stop() {
-            return Ok(None);
+        if told_to_stop() {
+            return Ok(Err(GaveUp::Stopped));
+        }
+        if !edit {
+            return Ok(Err(GaveUp::NotEditedAgain));
         }
         refused = true;
+    }
+}
+
+/// how a message came to be given up, which the command giving up on it
+/// says, rather than only that it was
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GaveUp {
+    /// saved as it was offered, or the editor quit without saving
+    Unchanged,
+    /// saved with nothing in it
+    Emptied,
+    /// the editor exited with an error, as vim's `:cq` makes it
+    EditorFailed,
+    /// refused, and quit at the question rather than edited again
+    NotEditedAgain,
+    /// rbld was told to stop while it was being written
+    Stopped,
+}
+
+impl GaveUp {
+    /// the headline it is given up under
+    pub const fn why(self) -> &'static str {
+        match self {
+            Self::Unchanged => "the message was left as it was offered",
+            Self::Emptied => "the message was emptied",
+            Self::EditorFailed => "the editor exited with an error",
+            Self::NotEditedAgain => "the refused message was not edited again",
+            Self::Stopped => "rbld was told to stop",
+        }
     }
 }
 

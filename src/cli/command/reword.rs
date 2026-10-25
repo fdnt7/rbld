@@ -42,10 +42,12 @@ pub(in crate::cli) fn reword(flake: &str) -> anyhow::Result<ExitCode> {
 
     let current = head.message().unwrap_or_default().to_owned();
     let below = git::stat(workdir)?;
-    let Some(message) = message::write(workdir, &current, &below, "leave the commit as it was")?
-    else {
-        stopped("the message was not changed", "the commit is as it was");
-        return Ok(ExitCode::FAILURE);
+    let message = match message::write(workdir, &current, &below, "leave the commit as it was")? {
+        Ok(message) => message,
+        Err(why) => {
+            stopped(why.why(), "the commit is as it was");
+            return Ok(ExitCode::FAILURE);
+        }
     };
 
     let _interrupts = Interrupts::held()?;
