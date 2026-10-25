@@ -13,7 +13,10 @@ const NH_FLAKE: &str = "NH_FLAKE";
 pub(super) struct Flake {
     // spelled out rather than a doc comment, which would want the variables
     // in backticks that help would then print
-    #[arg(help = "The flake's repository [default: $NH_OS_FLAKE, else $NH_FLAKE]")]
+    #[arg(
+        help = "The flake's repository [default: $NH_OS_FLAKE, else $NH_FLAKE]",
+        value_hint = clap::ValueHint::DirPath
+    )]
     flake: Option<String>,
 }
 

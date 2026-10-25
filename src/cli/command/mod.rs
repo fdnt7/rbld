@@ -46,6 +46,7 @@ pub(super) enum Command {
         #[command(flatten)]
         flake: Flake,
     },
+    /// Check a commit about to be made, as the git hooks do
     Check {
         #[command(subcommand)]
         command: check::CheckCommand,

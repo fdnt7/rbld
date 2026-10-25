@@ -50,10 +50,20 @@
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
 
+            nativeBuildInputs = [
+              pkgs.installShellFiles
+              pkgs.makeWrapper
+            ];
+            # the completions come of rbld's own commands, so it writes them,
+            # before it is wrapped
+            #
             # nh, nix and git are the system's own, and rbld uses whichever
             # the system has; dix is rbld's alone
-            nativeBuildInputs = [ pkgs.makeWrapper ];
             postInstall = ''
+              installShellCompletion --cmd rbld \
+                --bash <(RBLD_COMPLETIONS=bash $out/bin/rbld) \
+                --fish <(RBLD_COMPLETIONS=fish $out/bin/rbld) \
+                --zsh <(RBLD_COMPLETIONS=zsh $out/bin/rbld)
               wrapProgram $out/bin/rbld --prefix PATH : ${nixpkgs.lib.makeBinPath [ pkgs.dix ]}
             '';
           };
