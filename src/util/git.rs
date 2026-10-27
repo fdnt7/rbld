@@ -143,13 +143,56 @@ pub fn stage_tracked(repo: &Repository) -> anyhow::Result<Oid> {
 pub fn hook(flake: &str, name: &str) -> anyhow::Result<bool> {
     let _interrupts = Interrupts::held()?;
 
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(flake)
-        .args(["hook", "run", "--ignore-missing", name])
-        .status()?;
+    let status = run_hook(flake, name)?.status()?;
 
     Ok(status.success())
+}
+
+/// `git hook run` for the repository's `name` hook, in the flake's dev shell
+/// where the repository has that hook
+///
+/// the hooks run commands the dev shell puts on PATH, which the shell rbld is
+/// started from need not have: away from the repository, where nothing has
+/// loaded the dev shell, they are not found. A repository without the hook
+/// gets plain git, which passes it, so that a flake without hooks is not asked
+/// for a dev shell either.
+fn run_hook(flake: &str, name: &str) -> anyhow::Result<Command> {
+    let path = Command::new("git")
+        .arg("-C")
+        .arg(flake)
+        .args(["rev-parse", "--git-path"])
+        .arg(format!("hooks/{name}"))
+        .output()?;
+    if !path.status.success() {
+        anyhow::bail!(
+            "git rev-parse --git-path: {}",
+            String::from_utf8_lossy(&path.stderr).trim()
+        );
+    }
+    // relative to the repository, as git -C reports it
+    let path = Path::new(flake).join(String::from_utf8_lossy(&path.stdout).trim());
+
+    let mut command = if path.is_file() {
+        let mut nix = Command::new("nix");
+        nix.args([
+            "--option",
+            "warn-dirty",
+            "false",
+            "develop",
+            flake,
+            "-c",
+            "git",
+        ]);
+        nix
+    } else {
+        Command::new("git")
+    };
+    command
+        .arg("-C")
+        .arg(flake)
+        .args(["hook", "run", "--ignore-missing", name]);
+
+    Ok(command)
 }
 
 /// puts head back to `target` and the index back to `index`, as
@@ -223,10 +266,8 @@ pub fn check_message(flake: &str, message: &str) -> anyhow::Result<Option<String
         .tempfile()?;
     file.write_all(message.as_bytes())?;
 
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(flake)
-        .args(["hook", "run", "--ignore-missing", "commit-msg", "--"])
+    let status = run_hook(flake, "commit-msg")?
+        .arg("--")
         .arg(file.path())
         .status()?;
 
