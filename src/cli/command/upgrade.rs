@@ -18,7 +18,7 @@ use {
 /// the one file an update has any business writing
 const FLAKE_LOCK: &str = "flake.lock";
 
-pub(in crate::cli) fn update(flake: &str, asked: Option<Activation>) -> anyhow::Result<ExitCode> {
+pub(in crate::cli) fn upgrade(flake: &str, asked: Option<Activation>) -> anyhow::Result<ExitCode> {
     // asked at the end but answered for here: an update runs to a rebuild,
     // the rebuild stops to be confirmed, and there is nothing to be gained
     // from locking new inputs in and committing them on the way to a
@@ -37,7 +37,7 @@ pub(in crate::cli) fn update(flake: &str, asked: Option<Activation>) -> anyhow::
 
     if !paths.is_empty() {
         refuse_dirty(
-            "cannot update on a dirty working directory",
+            "cannot upgrade on a dirty working directory",
             workdir,
             &paths,
         );

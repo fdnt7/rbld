@@ -2,7 +2,7 @@ pub(super) mod check;
 pub(super) mod deploy;
 pub(super) mod reword;
 pub(super) mod status;
-pub(super) mod update;
+pub(super) mod upgrade;
 
 use std::collections::BTreeMap;
 
@@ -41,6 +41,14 @@ pub(super) enum Command {
         flake: Flake,
     },
     /// Update the flake's inputs, commit the lock file, and deploy it
+    Upgrade {
+        #[command(flatten)]
+        asked: Asked,
+        #[command(flatten)]
+        flake: Flake,
+    },
+    /// `upgrade` by its old name, kept a while for the hand that still types it
+    #[command(hide = true)]
     Update {
         #[command(flatten)]
         asked: Asked,

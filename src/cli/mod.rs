@@ -34,8 +34,12 @@ impl Cli {
                 warn("`rbld switch` is now `rbld deploy`, or `rbld` alone");
                 command::deploy::deploy(&resolve(flake), asked.activation())
             }
+            Some(Command::Upgrade { asked, flake }) => {
+                command::upgrade::upgrade(&resolve(flake), asked.activation())
+            }
             Some(Command::Update { asked, flake }) => {
-                command::update::update(&resolve(flake), asked.activation())
+                warn("`rbld update` is now `rbld upgrade`");
+                command::upgrade::upgrade(&resolve(flake), asked.activation())
             }
             Some(Command::Reword { flake }) => command::reword::reword(&resolve(flake)),
             Some(Command::Status { flake }) => command::status::status(&resolve(flake)),
