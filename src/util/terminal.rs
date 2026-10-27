@@ -35,6 +35,17 @@ pub fn refuse(headline: impl Display, body: impl Display) {
     );
 }
 
+/// refuses with a sentence rather than a listing, saying why in a note on the
+/// line under the headline, as [`stopped`] does
+pub fn refuse_because(headline: &str, why: &str) {
+    let _ = writeln!(
+        anstream::stdout(),
+        "\n{}\n{}",
+        labelled(ERROR, "error", paint(HEADLINE, headline)),
+        labelled(NOTE, "note", paint(NOTE, why))
+    );
+}
+
 /// says the command never got started
 ///
 /// `fatal` rather than `error`: a command that reports an `error` ran and
@@ -101,6 +112,17 @@ pub fn step(message: &str) {
 /// answers for the whole.
 pub fn done(message: &str) {
     say(format_args!("{}{}", gap(), labelled(DONE, "done", message)));
+}
+
+/// says something within the step above, in rbld's own voice
+///
+/// labelled, as every line in rbld's own words is, to be told apart from what
+/// the programs it runs write on the same terminal; but with no gap above it,
+/// being part of that step rather than a turning point of the run. The
+/// message is left as the caller styles it: plain for what the reader needs
+/// for what follows, [`NOTE`]-dimmed for an aside.
+pub fn note(message: impl Display) {
+    say(labelled(NOTE, "note", message));
 }
 
 /// says something went wrong that the run carries on past, its work standing

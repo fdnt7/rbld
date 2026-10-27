@@ -7,9 +7,8 @@ use {
         generation::Activation,
         git,
         message::{self, For, GaveUp, PLACEHOLDER},
-        render::{HEADLINE, NOTE, paint},
         scope::{self, Scope},
-        terminal::{Interrupts, has_terminal, hold_stops, refuse, step, stopped, warn},
+        terminal::{Interrupts, has_terminal, hold_stops, refuse_because, step, stopped, warn},
     },
     git2::{Commit, Oid, Repository},
 };
@@ -71,12 +70,9 @@ pub(in crate::cli) fn deploy(flake: &str, asked: Option<Activation>) -> anyhow::
     if let Scope::Host(other) = scope
         && *other != host
     {
-        refuse(
-            paint(
-                HEADLINE,
-                &format!("cannot deploy changes to {other} on {host}"),
-            ),
-            paint(NOTE, &format!("deploy them on {other} instead")),
+        refuse_because(
+            &format!("cannot deploy changes to {other} on {host}"),
+            &format!("deploy them on {other} instead"),
         );
         return Ok(ExitCode::FAILURE);
     }

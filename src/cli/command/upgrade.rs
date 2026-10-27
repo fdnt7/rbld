@@ -9,8 +9,7 @@ use {
         deploy::{self, Outcome},
         generation::Activation,
         git, lock,
-        render::{NOTE, paint},
-        terminal::{Interrupts, done, has_terminal, hold_stops, say, step, stopped},
+        terminal::{Interrupts, done, has_terminal, hold_stops, note, step, stopped},
     },
     git2::Repository,
 };
@@ -89,10 +88,7 @@ pub(in crate::cli) fn upgrade(flake: &str, asked: Option<Activation>) -> anyhow:
         // what the catch up brought in is deployed all the same, as a
         // deployment on the same clean tree would deploy it
         if repo.head()?.target() != caught_from {
-            say(paint(
-                NOTE,
-                "flake inputs are already current; deploying what was caught up with",
-            ));
+            note("flake inputs are already current; deploying what was caught up with");
             return super::deploy::deploy_clean(&repo, workdir, &host, asked);
         }
 

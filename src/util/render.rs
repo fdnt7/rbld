@@ -15,7 +15,8 @@ pub const FATAL: Style = AnsiColor::BrightRed.on_default().bold();
 pub const HEADLINE: Style = Style::new().bold();
 /// a directory, bold so it reads apart from the files under it
 pub const DIR: Style = Style::new().bold();
-/// an aside spelling out in prose what a colour already says
+/// the `note` label, and an aside: what can be read past without missing
+/// anything to act on
 pub const NOTE: Style = Style::new().dimmed();
 /// the `step` label, naming the program about to be given the terminal
 ///
@@ -52,11 +53,23 @@ pub fn paint(style: Style, text: &str) -> String {
 
 /// a line saying what kind of line it is before it says anything else
 ///
-/// `error`, `fatal`, `warning`, `note`, `step`, `done`: every line rbld says in its own voice
-/// opens with one of these, and the label is what the reader picks out first
-/// and what tells them how much of their attention the rest of it is owed.
-/// Only the label is styled, the message being left to whoever composed it,
-/// which is how a headline comes through bold and a step's message plain.
+/// How rbld writes to the terminal, which it shares with nh, nix, git and
+/// the hooks:
+///
+/// - Every line in rbld's own words opens with a label, so it is not taken
+///   for theirs. What has none is either theirs, or something rbld lays out
+///   under a labelled line that introduces it, such as a diff or a tree; a
+///   question shows whose it is by being one.
+/// - The label says what kind of line it is. `step`, `done`, `warning`,
+///   `error` and `fatal` are the turning points of a run, each set apart by a
+///   blank line above it; `note` is rbld saying something within a step, or
+///   after an `error`, what became of the work, and has none.
+/// - How much the line matters is the message's styling, the label keeping
+///   its colour: bold for a verdict, plain for what the reader needs for what
+///   follows, dimmed for an aside.
+///
+/// Only the label is styled here, the message being left to whoever composed
+/// it.
 pub fn labelled(style: Style, label: &str, message: impl Display) -> String {
     format!("{}: {message}", paint(style, label))
 }

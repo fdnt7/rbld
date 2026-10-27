@@ -7,7 +7,7 @@ use {
         git,
         note::{self, Record},
         render::{NOTE, headed, paint},
-        terminal::{say, step, warn},
+        terminal::{note, step, warn},
     },
     chrono::{DateTime, FixedOffset, Local, TimeDelta},
     git2::{Oid, Repository},
@@ -40,9 +40,8 @@ pub(in crate::cli) fn status(flake: &str) -> anyhow::Result<ExitCode> {
                         } else {
                             format!("`git push {remote} {}` sends them", note::notes_ref(host))
                         };
-                        say(paint(
-                            NOTE,
-                            &format!("{remote} lacks some of {host}'s notes here; {sends}"),
+                        note(format!(
+                            "{remote} lacks some of {host}'s notes here; {sends}"
                         ));
                     } else {
                         warn(&format!(
@@ -68,7 +67,7 @@ pub(in crate::cli) fn status(flake: &str) -> anyhow::Result<ExitCode> {
     }
 
     if hosts.is_empty() {
-        say(paint(NOTE, "no host has a deployment recorded yet"));
+        note("no host has a deployment recorded yet");
         return Ok(ExitCode::SUCCESS);
     }
 

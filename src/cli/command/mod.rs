@@ -10,9 +10,9 @@ use {
     super::{Flake, activation::Asked},
     crate::util::{
         git::{self, CaughtUp},
-        render::{DISALLOWED, HEADLINE, NOTE, file_path, headed, labelled, paint, rooted},
+        render::{DISALLOWED, HEADLINE, NOTE, file_path, headed, paint, rooted},
         scope::Scope,
-        terminal::{refuse, say, step, warn},
+        terminal::{note, refuse, refuse_because, say, step, warn},
     },
     anstyle::Style,
     git2::{Oid, Repository},
@@ -121,20 +121,15 @@ fn catch_up(repo: &Repository, workdir: &str, host: &str) -> anyhow::Result<bool
 
     match git::catch_up(repo, workdir)? {
         CaughtUp::Current => {}
-        // a note, but not dimmed as an aside is: what is built and compared
-        // below is what came in as well as anything here, and a comparison
-        // holding more than the commit made here is not to be taken for a
-        // mistake
+        // a note, but not dimmed as an aside: what is built and compared below
+        // is what came in as well as anything here, and a comparison holding
+        // more than the commit made here is not to be taken for a mistake
         CaughtUp::Forwarded { upstream, from, to } => {
             let incoming = git::incoming(repo, from, to, host)?;
             let count = incoming.len();
             let commits = if count == 1 { "commit" } else { "commits" };
-            say(labelled(
-                NOTE,
-                "note",
-                format!(
-                    "fast forwarded to {upstream}: {count} {commits} came in, and what is built below includes them"
-                ),
+            note(format!(
+                "fast forwarded to {upstream}: {count} {commits} came in, and what is built below includes them"
             ));
             // the tree ends its last line itself, and say ends another
             say(listing(repo, from, to, &incoming)?.to_string().trim_end());
@@ -149,12 +144,9 @@ fn catch_up(repo: &Repository, workdir: &str, host: &str) -> anyhow::Result<bool
             ahead,
             behind,
         } => {
-            refuse(
-                paint(HEADLINE, &format!("head and {upstream} have diverged")),
-                paint(
-                    NOTE,
-                    &format!("{ahead} here and {behind} there; rebase or merge, then deploy again"),
-                ),
+            refuse_because(
+                &format!("head and {upstream} have diverged"),
+                &format!("{ahead} here and {behind} there; rebase or merge, then deploy again"),
             );
             return Ok(false);
         }

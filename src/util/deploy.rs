@@ -15,7 +15,7 @@ use {
         generation::{Activation, Decision, Generation},
         note::{self, Note},
         render::{NOTE, paint},
-        terminal::{ask, done, say, step, told_to_stop, warn},
+        terminal::{ask, done, note, say, step, told_to_stop, warn},
         units::Watched,
     },
     anstream::adapter::strip_str,
@@ -142,7 +142,7 @@ pub fn deploy(
     };
 
     if new == replaced {
-        say(paint(NOTE, already(decision.activation)));
+        note(already(decision.activation));
 
         if !ready("")? {
             return Ok(Outcome::NotDeployed(NOT_READY));
@@ -204,10 +204,10 @@ fn compare(replaced: &Generation, new: &Generation, decision: &Decision) -> io::
 
     let verb = decision.activation.verb();
     for reason in &decision.reasons {
-        say(paint(NOTE, &format!("{verb}, because {reason}")));
+        note(paint(NOTE, &format!("{verb}, because {reason}")));
     }
     for watched in &decision.watched {
-        say(paint(
+        note(paint(
             NOTE,
             &format!(
                 "{verb}ing {}s {} too, which the graphical session is made of",

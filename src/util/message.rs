@@ -5,8 +5,7 @@
 use {
     crate::util::{
         git,
-        render::{HEADLINE, paint},
-        terminal::{key, say, step, told_to_stop},
+        terminal::{key, say, step, told_to_stop, warn},
     },
     git2::Repository,
 };
@@ -87,7 +86,7 @@ pub fn write(
             "the commit-msg hook refused the message".to_owned()
         };
 
-        say(paint(HEADLINE, &refusal));
+        warn(&refusal);
         let edit = loop {
             let pressed = key(&format!("[e]dit it again, or [q]uit and {quit}?"))?;
             match pressed.map(choice) {
