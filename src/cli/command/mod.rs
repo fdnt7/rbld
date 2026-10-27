@@ -12,7 +12,7 @@ use {
         git::{self, CaughtUp},
         render::{DISALLOWED, HEADLINE, NOTE, file_path, headed, paint, rooted},
         scope::Scope,
-        terminal::{note, refuse, refuse_because, say, step, warn},
+        terminal::{key, note, refuse, refuse_because, say, step, stopped, warn},
     },
     anstyle::Style,
     git2::{Oid, Repository},
@@ -117,52 +117,101 @@ fn refuse_split(headline: &str, workdir: &str, scopes: &BTreeMap<Scope, Vec<Stri
 /// is. A fast forward made here stays, whatever becomes of the deployment: it
 /// brings in what is already published rather than anything of rbld's making.
 fn catch_up(repo: &Repository, workdir: &str, host: &str) -> anyhow::Result<bool> {
-    step("catching up with the remote");
+    // a retry fetches again from the top, nothing having been done yet
+    loop {
+        step("catching up with the remote");
 
-    match git::catch_up(repo, workdir)? {
-        CaughtUp::Current => {}
-        // a note, but not dimmed as an aside: what is built and compared below
-        // is what came in as well as anything here, and a comparison holding
-        // more than the commit made here is not to be taken for a mistake
-        CaughtUp::Forwarded { upstream, from, to } => {
-            let incoming = git::incoming(repo, from, to, host)?;
-            let count = incoming.len();
-            let commits = if count == 1 { "commit" } else { "commits" };
-            note(format!(
-                "fast forwarded to {upstream}: {count} {commits} came in, and what is built below includes them"
-            ));
-            // the tree ends its last line itself, and say ends another
-            say(listing(repo, from, to, &incoming)?.to_string().trim_end());
+        match git::catch_up(repo, workdir)? {
+            CaughtUp::Current => {}
+            // a note, but not dimmed as an aside: what is built and compared below
+            // is what came in as well as anything here, and a comparison holding
+            // more than the commit made here is not to be taken for a mistake
+            CaughtUp::Forwarded { upstream, from, to } => {
+                let incoming = git::incoming(repo, from, to, host)?;
+                let count = incoming.len();
+                let commits = if count == 1 { "commit" } else { "commits" };
+                note(format!(
+                    "fast forwarded to {upstream}: {count} {commits} came in, and what is built below includes them"
+                ));
+                // the tree ends its last line itself, and say ends another
+                say(listing(repo, from, to, &incoming)?.to_string().trim_end());
+            }
+            // asked rather than gone past: a network not yet back, as just after
+            // waking, would otherwise have an older configuration deployed than
+            // there is, with one line of warning to say so; and not refused
+            // either, as one that broke the network has to be deployable without
+            CaughtUp::Unfetched { remote, why } => {
+                warn(&format!("{remote} could not be fetched from: {why}"));
+                match unfetched()? {
+                    Unfetched::Retry => continue,
+                    Unfetched::Continue => {}
+                    Unfetched::Quit => {
+                        stopped(
+                            &format!("not deployed without fetching from {remote}"),
+                            "nothing is changed; run it again once the network is back",
+                        );
+                        return Ok(false);
+                    }
+                }
+            }
+            CaughtUp::Diverged {
+                upstream,
+                ahead,
+                behind,
+            } => {
+                refuse_because(
+                    &format!("head and {upstream} have diverged"),
+                    &format!("{ahead} here and {behind} there; rebase or merge, then deploy again"),
+                );
+                return Ok(false);
+            }
+            CaughtUp::Blocked { upstream, why } => {
+                refuse(
+                    paint(
+                        HEADLINE,
+                        &format!("cannot fast forward to {upstream} over the changes here"),
+                    ),
+                    paint(NOTE, &why),
+                );
+                return Ok(false);
+            }
         }
-        CaughtUp::Unfetched { remote, why } => {
-            warn(&format!(
-                "{remote} could not be fetched from, so what is here goes as it is: {why}"
-            ));
-        }
-        CaughtUp::Diverged {
-            upstream,
-            ahead,
-            behind,
-        } => {
-            refuse_because(
-                &format!("head and {upstream} have diverged"),
-                &format!("{ahead} here and {behind} there; rebase or merge, then deploy again"),
-            );
-            return Ok(false);
-        }
-        CaughtUp::Blocked { upstream, why } => {
-            refuse(
-                paint(
-                    HEADLINE,
-                    &format!("cannot fast forward to {upstream} over the changes here"),
-                ),
-                paint(NOTE, &why),
-            );
-            return Ok(false);
-        }
+
+        return Ok(true);
     }
+}
 
-    Ok(true)
+/// what to do where the remote could not be fetched from
+enum Unfetched {
+    /// fetch again, the network being back, as it may soon be after waking
+    Retry,
+    /// deploy what is here, the network being down for a while, or broken
+    Continue,
+    Quit,
+}
+
+/// what to do where the remote could not be fetched from, asked as the commit
+/// message's refusal is: by letter, with no default
+///
+/// Asked rather than retried by itself: how long the network takes to come
+/// back is better seen than guessed, and a configuration that broke it has
+/// no reason to wait on it.
+fn unfetched() -> anyhow::Result<Unfetched> {
+    loop {
+        let pressed = key("[r]etry, [c]ontinue with what is here, or [q]uit?")?;
+        let (answer, said) = match pressed {
+            Some(b'r' | b'R') => (Unfetched::Retry, "retry"),
+            Some(b'c' | b'C') => (Unfetched::Continue, "continue"),
+            Some(b'q' | b'Q' | 0x03) | None => (Unfetched::Quit, "quit"),
+            // asked again, on a line of its own
+            Some(_) => {
+                say("");
+                continue;
+            }
+        };
+        say(said);
+        return Ok(answer);
+    }
 }
 
 /// the commits a catch up brought in, under the range they span, oldest first

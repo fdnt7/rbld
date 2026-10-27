@@ -362,7 +362,9 @@ pub enum CaughtUp {
         from: Oid,
         to: Oid,
     },
-    /// the remote could not be fetched from, as it cannot with no network
+    /// the remote could not be fetched from, as it cannot with no network;
+    /// `why` is the first line of what git said, the one naming the cause,
+    /// git's own advice after it being about access, which is seldom it
     Unfetched { remote: String, why: String },
     /// head and its upstream each have commits the other lacks
     Diverged {
@@ -380,8 +382,9 @@ pub enum CaughtUp {
 /// Never more than a fast forward: where the two have diverged, a rebase
 /// would make the commits here over, signed again and dated anew, and a merge
 /// would be a commit nobody wrote, so that is left to be done by hand. A
-/// fetch that fails is said rather than stopped on, since a configuration
-/// that broke the network has to be deployable without one.
+/// fetch that fails is handed back rather than an error, for the caller to
+/// ask about: a configuration that broke the network has to be deployable
+/// without one.
 pub fn catch_up(repo: &Repository, workdir: &str) -> anyhow::Result<CaughtUp> {
     let head = repo.head()?;
     let Some(branch) = head.name().ok().filter(|_| head.is_branch()) else {
@@ -406,7 +409,12 @@ pub fn catch_up(repo: &Repository, workdir: &str) -> anyhow::Result<CaughtUp> {
     if !fetched.status.success() {
         return Ok(CaughtUp::Unfetched {
             remote,
-            why: String::from_utf8_lossy(&fetched.stderr).trim().to_owned(),
+            why: String::from_utf8_lossy(&fetched.stderr)
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or_default()
+                .to_owned(),
         });
     }
 

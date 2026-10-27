@@ -6,6 +6,8 @@ extend-ignore-re = [
   "anstyle::Color",
   # Ignore "color": dix's flag
   "\"--color\"",
+  # Ignore the rest of a word after the key that chooses it, as in "[r]etry"
+  "\\[[a-z]\\][a-z]+",
 ]
 extend-ignore-identifiers-re = [
   # Ignore "color"
