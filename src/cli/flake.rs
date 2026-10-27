@@ -15,9 +15,21 @@ pub(super) struct Flake {
     // in backticks that help would then print
     #[arg(
         help = "The flake's repository [default: $NH_OS_FLAKE, else $NH_FLAKE]",
-        value_hint = clap::ValueHint::DirPath
+        value_hint = clap::ValueHint::DirPath,
+        value_parser = directory
     )]
     flake: Option<String>,
+}
+
+/// a flake given that is a directory, so that a mistyped command, which
+/// `rbld` alone would otherwise take for the flake, is refused as clap refuses
+/// any bad argument, before anything is done
+fn directory(value: &str) -> Result<String, String> {
+    if std::path::Path::new(value).is_dir() {
+        Ok(value.to_owned())
+    } else {
+        Err("not a directory".to_owned())
+    }
 }
 
 impl Flake {
