@@ -3,7 +3,6 @@ mod command;
 mod flake;
 
 use {
-    crate::util::terminal::warn,
     activation::Asked,
     clap::CommandFactory as _,
     command::{Command, check::CheckCommand},
@@ -30,15 +29,7 @@ impl Cli {
             Some(Command::Deploy { asked, flake }) => {
                 command::deploy::deploy(&resolve(flake), asked.activation())
             }
-            Some(Command::Switch { asked, flake }) => {
-                warn("`rbld switch` is now `rbld deploy`, or `rbld` alone");
-                command::deploy::deploy(&resolve(flake), asked.activation())
-            }
             Some(Command::Upgrade { asked, flake }) => {
-                command::upgrade::upgrade(&resolve(flake), asked.activation())
-            }
-            Some(Command::Update { asked, flake }) => {
-                warn("`rbld update` is now `rbld upgrade`");
                 command::upgrade::upgrade(&resolve(flake), asked.activation())
             }
             Some(Command::Reword { flake }) => command::reword::reword(&resolve(flake)),

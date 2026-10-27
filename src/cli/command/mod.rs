@@ -35,24 +35,8 @@ pub(super) enum Command {
         #[command(flatten)]
         flake: Flake,
     },
-    /// `deploy` by its old name, kept a while for the hand that still types it
-    #[command(hide = true)]
-    Switch {
-        #[command(flatten)]
-        asked: Asked,
-        #[command(flatten)]
-        flake: Flake,
-    },
     /// Update the flake's inputs, commit the lock file, and deploy it
     Upgrade {
-        #[command(flatten)]
-        asked: Asked,
-        #[command(flatten)]
-        flake: Flake,
-    },
-    /// `upgrade` by its old name, kept a while for the hand that still types it
-    #[command(hide = true)]
-    Update {
         #[command(flatten)]
         asked: Asked,
         #[command(flatten)]
