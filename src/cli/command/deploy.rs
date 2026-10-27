@@ -40,7 +40,7 @@ pub(in crate::cli) fn deploy(flake: &str, asked: Option<Activation>) -> anyhow::
     let workdir = git::workdir(&repo, flake);
     let host = hostname::get()?.to_string_lossy().into_owned();
 
-    if !super::catch_up(&repo, workdir)? {
+    if !super::catch_up(&repo, workdir, &host)? {
         return Ok(ExitCode::FAILURE);
     }
 

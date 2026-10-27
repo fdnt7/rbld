@@ -44,8 +44,12 @@ pub(in crate::cli) fn upgrade(flake: &str, asked: Option<Activation>) -> anyhow:
         return Ok(ExitCode::FAILURE);
     }
 
+    // a commit is deployed once per machine, each on its own schedule, so
+    // the host it was deployed on is what tells the notes apart; and what the
+    // catch up brings in is said of whether it can change this host
+    let host = hostname::get()?.to_string_lossy().into_owned();
     let caught_from = repo.head()?.target();
-    if !super::catch_up(&repo, workdir)? {
+    if !super::catch_up(&repo, workdir, &host)? {
         return Ok(ExitCode::FAILURE);
     }
 
@@ -89,7 +93,6 @@ pub(in crate::cli) fn upgrade(flake: &str, asked: Option<Activation>) -> anyhow:
                 NOTE,
                 "flake inputs are already current; deploying what was caught up with",
             ));
-            let host = hostname::get()?.to_string_lossy().into_owned();
             return super::deploy::deploy_clean(&repo, workdir, &host, asked);
         }
 
@@ -106,14 +109,11 @@ pub(in crate::cli) fn upgrade(flake: &str, asked: Option<Activation>) -> anyhow:
         format!("{subject}\n\n{summary}")
     };
 
-    // a commit is deployed once per machine, each on its own schedule, so
-    // the host it was deployed on is what tells the notes apart
-    //
-    // settled ahead of the commit rather than after it, as is the signature
-    // the note is written with: either failing would otherwise stop us with
-    // the lock file already committed and nothing yet built from it
+    // settled ahead of the commit rather than after it, as the host is
+    // above: the signature the note is written with failing would otherwise
+    // stop us with the lock file already committed and nothing yet built
+    // from it
     repo.signature()?;
-    let host = hostname::get()?.to_string_lossy().into_owned();
 
     step("committing the lock file");
 

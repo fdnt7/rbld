@@ -8,7 +8,10 @@ use std::{
 };
 
 use {
-    crate::util::{scope::HOSTS, terminal::Interrupts},
+    crate::util::{
+        scope::{HOSTS, Scope},
+        terminal::Interrupts,
+    },
     git2::{Commit, Oid, Repository, ResetType, StatusOptions, build::CheckoutBuilder},
 };
 
@@ -353,8 +356,12 @@ pub enum CaughtUp {
     /// nothing came in: head follows no branch, or has everything the one it
     /// follows has, whether or not it has more besides
     Current,
-    /// head was behind, and has been fast forwarded over `count` commits
-    Forwarded { upstream: String, count: usize },
+    /// head was behind, and has been fast forwarded from `from` to `to`
+    Forwarded {
+        upstream: String,
+        from: Oid,
+        to: Oid,
+    },
     /// the remote could not be fetched from, as it cannot with no network
     Unfetched { remote: String, why: String },
     /// head and its upstream each have commits the other lacks
@@ -442,6 +449,78 @@ pub fn catch_up(repo: &Repository, workdir: &str) -> anyhow::Result<CaughtUp> {
 
     Ok(CaughtUp::Forwarded {
         upstream: name,
-        count: behind,
+        from: ours,
+        to: theirs,
     })
+}
+
+/// a commit a catch up brought in
+pub struct Incoming {
+    /// abbreviated, as git would
+    pub id: String,
+    pub summary: String,
+    /// the other host it touches, where it touches nothing but that host and
+    /// so cannot change this one
+    pub elsewhere: Option<String>,
+}
+
+/// the commits after `from` up to `to`, oldest first, each said of whether it
+/// can change `host`
+///
+/// Only a commit to another host's part alone is said not to: a user's part
+/// may be taken up by a host the user has no account on, as k takes up f's
+/// features, so no other part can be ruled out by its path.
+pub fn incoming(
+    repo: &Repository,
+    from: Oid,
+    to: Oid,
+    host: &str,
+) -> anyhow::Result<Vec<Incoming>> {
+    let hosts = hosts(repo)?;
+    let mut walk = repo.revwalk()?;
+    walk.push(to)?;
+    walk.hide(from)?;
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)?;
+
+    let mut commits = vec![];
+    for oid in walk {
+        let commit = repo.find_commit(oid?)?;
+        let parent = commit
+            .parents()
+            .next()
+            .map(|parent| parent.tree())
+            .transpose()?;
+        let diff = repo.diff_tree_to_tree(parent.as_ref(), Some(&commit.tree()?), None)?;
+
+        let mut scopes = BTreeSet::new();
+        for delta in diff.deltas() {
+            for file in [delta.old_file(), delta.new_file()] {
+                if let Some(path) = file.path().and_then(Path::to_str) {
+                    scopes.insert(Scope::of(path, &hosts));
+                }
+            }
+        }
+        let elsewhere = match scopes.iter().collect::<Vec<_>>()[..] {
+            [Scope::Host(other)] if other != host => Some(other.clone()),
+            _ => None,
+        };
+
+        commits.push(Incoming {
+            id: commit
+                .as_object()
+                .short_id()?
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            summary: commit
+                .summary()
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+                .to_owned(),
+            elsewhere,
+        });
+    }
+
+    Ok(commits)
 }
