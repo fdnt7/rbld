@@ -20,7 +20,7 @@ pub const PLACEHOLDER: &str = "FIXME_";
 const REFUSED: &str = "# Refused by the commit-msg hook; its reasons are on the terminal.\n";
 
 /// what a kept message opens under, above it
-const KEPT: &str = "# Kept from a switch that did not go through: save it as it is to use it,\n# or empty it to give up.\n";
+const KEPT: &str = "# Kept from a deployment that did not go through: save it as it is to\n# use it, or empty it to give up.\n";
 
 /// git's own scissors line, from which down a message is shown and not kept
 const SCISSORS: &str = "# ------------------------ >8 ------------------------";
@@ -195,17 +195,17 @@ fn cleaned(text: &str) -> String {
 }
 
 /// which command a message was written for, each keeping its own, so that
-/// one left by a reword is never offered for a switch's changes
+/// one left by a reword is never offered for a deployment's changes
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum For {
-    Switch,
+    Deploy,
     Reword,
 }
 
 impl For {
     const fn file(self) -> &'static str {
         match self {
-            Self::Switch => "RBLD_EDITMSG",
+            Self::Deploy => "RBLD_EDITMSG",
             Self::Reword => "RBLD_REWORDMSG",
         }
     }

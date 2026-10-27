@@ -3,29 +3,43 @@ mod command;
 mod flake;
 
 use {
+    crate::util::terminal::warn,
+    activation::Asked,
     clap::CommandFactory as _,
     command::{Command, check::CheckCommand},
     flake::Flake,
 };
 
+/// Deploy this host's NixOS configuration, committing and recording it
 #[derive(clap::Parser)]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
+    // what `rbld` alone takes, being `rbld deploy`
+    #[command(flatten)]
+    asked: Asked,
+    #[command(flatten)]
+    flake: Flake,
 }
 
 impl Cli {
     pub(super) fn run(self) -> anyhow::Result<std::process::ExitCode> {
         match self.command {
-            Command::Switch { asked, flake } => {
-                command::switch::switch(&resolve(flake), asked.activation())
+            None => command::deploy::deploy(&resolve(self.flake), self.asked.activation()),
+            Some(Command::Deploy { asked, flake }) => {
+                command::deploy::deploy(&resolve(flake), asked.activation())
             }
-            Command::Update { asked, flake } => {
+            Some(Command::Switch { asked, flake }) => {
+                warn("`rbld switch` is now `rbld deploy`, or `rbld` alone");
+                command::deploy::deploy(&resolve(flake), asked.activation())
+            }
+            Some(Command::Update { asked, flake }) => {
                 command::update::update(&resolve(flake), asked.activation())
             }
-            Command::Reword { flake } => command::reword::reword(&resolve(flake)),
-            Command::Status { flake } => command::status::status(&resolve(flake)),
-            Command::Check { command } => match command {
+            Some(Command::Reword { flake }) => command::reword::reword(&resolve(flake)),
+            Some(Command::Status { flake }) => command::status::status(&resolve(flake)),
+            Some(Command::Check { command }) => match command {
                 CheckCommand::Scope(flake) => command::check::scope::check_scope(&resolve(flake)),
             },
         }

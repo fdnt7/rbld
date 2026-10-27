@@ -25,7 +25,7 @@ use {
 ///
 /// A message is given up by emptying it, or by leaving it as it was offered,
 /// as on quitting the editor without saving.
-pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::Result<ExitCode> {
+pub(in crate::cli) fn deploy(flake: &str, asked: Option<Activation>) -> anyhow::Result<ExitCode> {
     // the deployment stops to be confirmed, so there is no starting one
     // without a terminal to confirm it on
     if !has_terminal() {
@@ -47,7 +47,7 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
     let paths = git::changed_paths(&repo)?;
 
     if paths.is_empty() {
-        return switch_clean(&repo, workdir, &host, asked);
+        return deploy_clean(&repo, workdir, &host, asked);
     }
 
     let scopes = scope::group(paths, &git::hosts(&repo)?);
@@ -57,7 +57,7 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
     let Some(scope) = scopes.keys().next().filter(|_| scopes.len() == 1) else {
         refuse_split(
             &format!(
-                "cannot switch on changes spanning {} scopes; commit them one scope at a time",
+                "cannot deploy changes spanning {} scopes; commit them one scope at a time",
                 scopes.len()
             ),
             workdir,
@@ -74,7 +74,7 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
         refuse(
             paint(
                 HEADLINE,
-                &format!("cannot switch on {host} to changes to {other}"),
+                &format!("cannot deploy changes to {other} on {host}"),
             ),
             paint(NOTE, &format!("deploy them on {other} instead")),
         );
@@ -120,7 +120,7 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
 
     // a message kept from a switch that did not go through is written
     // from, rather than written again
-    let kept = message::kept(&repo, For::Switch);
+    let kept = message::kept(&repo, For::Deploy);
     let start = kept.clone().unwrap_or_else(|| placeholder(scope));
     let mut message = None;
     let mut gave_up = None;
@@ -139,9 +139,9 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
             let message = message.unwrap_or_else(|| placeholder(scope));
 
             if git::amend(workdir, &message)? {
-                message::forget(&repo, For::Switch);
+                message::forget(&repo, For::Deploy);
             } else {
-                let kept = message::keep(&repo, For::Switch, &message)?;
+                let kept = message::keep(&repo, For::Deploy, &message)?;
                 warn(&format!(
                     "the commit keeps its placeholder message, as git did not take the one written; it is kept for `git commit --amend --file {kept}`"
                 ));
@@ -155,7 +155,7 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
         // emptied is let go of, kept or not
         Ok(Outcome::NotDeployed(headline)) => {
             if gave_up == Some(GaveUp::Emptied) {
-                message::forget(&repo, For::Switch);
+                message::forget(&repo, For::Deploy);
             }
             gave_up.map_or(headline, GaveUp::why).to_owned()
         }
@@ -180,10 +180,12 @@ fn undo(
     let undone = "the commit is undone and the changes are back as they were found";
     match message {
         Some(message) => {
-            message::keep(repo, For::Switch, message)?;
+            message::keep(repo, For::Deploy, message)?;
             stopped(
                 headline,
-                &format!("{undone}; the message written is kept, for the next switch to open on"),
+                &format!(
+                    "{undone}; the message written is kept, for the next deployment to open on"
+                ),
             );
         }
         None => stopped(headline, undone),
@@ -192,7 +194,7 @@ fn undo(
     Ok(())
 }
 
-pub(super) fn switch_clean(
+pub(super) fn deploy_clean(
     repo: &Repository,
     workdir: &str,
     host: &str,

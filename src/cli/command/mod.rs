@@ -1,7 +1,7 @@
 pub(super) mod check;
+pub(super) mod deploy;
 pub(super) mod reword;
 pub(super) mod status;
-pub(super) mod switch;
 pub(super) mod update;
 
 use std::collections::BTreeMap;
@@ -24,7 +24,16 @@ const SCOPE: Style = Style::new().bold();
 
 #[derive(clap::Subcommand, Debug)]
 pub(super) enum Command {
-    /// Deploy the commit checked out, committing any changes on top of it first
+    /// Deploy the commit checked out, committing any changes on top of it
+    /// first; what `rbld` alone does
+    Deploy {
+        #[command(flatten)]
+        asked: Asked,
+        #[command(flatten)]
+        flake: Flake,
+    },
+    /// `deploy` by its old name, kept a while for the hand that still types it
+    #[command(hide = true)]
     Switch {
         #[command(flatten)]
         asked: Asked,

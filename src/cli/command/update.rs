@@ -83,14 +83,14 @@ pub(in crate::cli) fn update(flake: &str, asked: Option<Activation>) -> anyhow::
     // one it found nothing newer for
     if !repo.status_file(Path::new(FLAKE_LOCK))?.is_wt_modified() {
         // what the catch up brought in is deployed all the same, as a
-        // switch on the same clean tree would deploy it
+        // deployment on the same clean tree would deploy it
         if repo.head()?.target() != caught_from {
             say(paint(
                 NOTE,
                 "flake inputs are already current; deploying what was caught up with",
             ));
             let host = hostname::get()?.to_string_lossy().into_owned();
-            return super::switch::switch_clean(&repo, workdir, &host, asked);
+            return super::deploy::deploy_clean(&repo, workdir, &host, asked);
         }
 
         done("flake inputs are already current");
