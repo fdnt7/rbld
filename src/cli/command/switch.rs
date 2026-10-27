@@ -39,6 +39,11 @@ pub(in crate::cli) fn switch(flake: &str, asked: Option<Activation>) -> anyhow::
     let repo = Repository::open(flake)?;
     let workdir = git::workdir(&repo, flake);
     let host = hostname::get()?.to_string_lossy().into_owned();
+
+    if !super::catch_up(&repo, workdir)? {
+        return Ok(ExitCode::FAILURE);
+    }
+
     let paths = git::changed_paths(&repo)?;
 
     if paths.is_empty() {
@@ -187,7 +192,7 @@ fn undo(
     Ok(())
 }
 
-fn switch_clean(
+pub(super) fn switch_clean(
     repo: &Repository,
     workdir: &str,
     host: &str,

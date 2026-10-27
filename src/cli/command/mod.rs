@@ -9,11 +9,13 @@ use std::collections::BTreeMap;
 use {
     super::{Flake, activation::Asked},
     crate::util::{
+        git::{self, CaughtUp},
         render::{DISALLOWED, HEADLINE, NOTE, file_path, paint, rooted},
         scope::Scope,
-        terminal::refuse,
+        terminal::{refuse, say, step, warn},
     },
     anstyle::Style,
+    git2::Repository,
     termtree::Tree,
 };
 
@@ -85,4 +87,57 @@ fn refuse_split(headline: &str, workdir: &str, scopes: &BTreeMap<Scope, Vec<Stri
     }
 
     refuse(paint(HEADLINE, headline), tree);
+}
+
+/// brings head up to the branch it follows before anything is deployed from
+/// it, saying how that went, and whether the deployment is to go on
+///
+/// Another host may have pushed what this one is about to deploy beside, and
+/// deploying without it would be deploying an older configuration than there
+/// is. A fast forward made here stays, whatever becomes of the deployment: it
+/// brings in what is already published rather than anything of rbld's making.
+fn catch_up(repo: &Repository, workdir: &str) -> anyhow::Result<bool> {
+    step("catching up with the remote");
+
+    match git::catch_up(repo, workdir)? {
+        CaughtUp::Current => {}
+        CaughtUp::Forwarded { upstream, count } => {
+            let commits = if count == 1 { "commit" } else { "commits" };
+            say(paint(
+                NOTE,
+                &format!("fast forwarded to {upstream}, {count} {commits} on"),
+            ));
+        }
+        CaughtUp::Unfetched { remote, why } => {
+            warn(&format!(
+                "{remote} could not be fetched from, so what is here goes as it is: {why}"
+            ));
+        }
+        CaughtUp::Diverged {
+            upstream,
+            ahead,
+            behind,
+        } => {
+            refuse(
+                paint(HEADLINE, &format!("head and {upstream} have diverged")),
+                paint(
+                    NOTE,
+                    &format!("{ahead} here and {behind} there; rebase or merge, then deploy again"),
+                ),
+            );
+            return Ok(false);
+        }
+        CaughtUp::Blocked { upstream, why } => {
+            refuse(
+                paint(
+                    HEADLINE,
+                    &format!("cannot fast forward to {upstream} over the changes here"),
+                ),
+                paint(NOTE, &why),
+            );
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }

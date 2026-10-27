@@ -347,3 +347,101 @@ pub fn undo(repo: &Repository, target: &Commit<'_>, path: &str) -> anyhow::Resul
 
     Ok(())
 }
+
+/// where head stands against the branch it follows, once that is fetched
+pub enum CaughtUp {
+    /// nothing came in: head follows no branch, or has everything the one it
+    /// follows has, whether or not it has more besides
+    Current,
+    /// head was behind, and has been fast forwarded over `count` commits
+    Forwarded { upstream: String, count: usize },
+    /// the remote could not be fetched from, as it cannot with no network
+    Unfetched { remote: String, why: String },
+    /// head and its upstream each have commits the other lacks
+    Diverged {
+        upstream: String,
+        ahead: usize,
+        behind: usize,
+    },
+    /// head is behind, but fast forwarding it would overwrite changes here
+    Blocked { upstream: String, why: String },
+}
+
+/// fetches the remote the branch checked out follows, and fast forwards head
+/// to it where head is only behind
+///
+/// Never more than a fast forward: where the two have diverged, a rebase
+/// would make the commits here over, signed again and dated anew, and a merge
+/// would be a commit nobody wrote, so that is left to be done by hand. A
+/// fetch that fails is said rather than stopped on, since a configuration
+/// that broke the network has to be deployable without one.
+pub fn catch_up(repo: &Repository, workdir: &str) -> anyhow::Result<CaughtUp> {
+    let head = repo.head()?;
+    let Some(branch) = head.name().ok().filter(|_| head.is_branch()) else {
+        return Ok(CaughtUp::Current);
+    };
+    let Some(remote) = repo
+        .branch_upstream_remote(branch)
+        .ok()
+        .and_then(|remote| remote.as_str().ok().map(str::to_owned))
+    else {
+        return Ok(CaughtUp::Current);
+    };
+
+    let fetched = {
+        let _interrupts = Interrupts::held()?;
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["fetch", "--quiet", &remote])
+            .output()?
+    };
+    if !fetched.status.success() {
+        return Ok(CaughtUp::Unfetched {
+            remote,
+            why: String::from_utf8_lossy(&fetched.stderr).trim().to_owned(),
+        });
+    }
+
+    // read again: the fetch has moved the upstream under the one read above
+    let Ok(upstream) = git2::Branch::wrap(repo.head()?).upstream() else {
+        return Ok(CaughtUp::Current);
+    };
+    let name = upstream.name()?.unwrap_or("upstream").to_owned();
+    let (Some(ours), Some(theirs)) = (repo.head()?.target(), upstream.get().target()) else {
+        return Ok(CaughtUp::Current);
+    };
+    let (ahead, behind) = repo.graph_ahead_behind(ours, theirs)?;
+
+    if behind == 0 {
+        return Ok(CaughtUp::Current);
+    }
+    if ahead > 0 {
+        return Ok(CaughtUp::Diverged {
+            upstream: name,
+            ahead,
+            behind,
+        });
+    }
+
+    let merged = {
+        let _interrupts = Interrupts::held()?;
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["merge", "--ff-only", "--quiet"])
+            .arg(theirs.to_string())
+            .output()?
+    };
+    if !merged.status.success() {
+        return Ok(CaughtUp::Blocked {
+            upstream: name,
+            why: String::from_utf8_lossy(&merged.stderr).trim().to_owned(),
+        });
+    }
+
+    Ok(CaughtUp::Forwarded {
+        upstream: name,
+        count: behind,
+    })
+}

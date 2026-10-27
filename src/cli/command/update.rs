@@ -9,7 +9,8 @@ use {
         deploy::{self, Outcome},
         generation::Activation,
         git, lock,
-        terminal::{Interrupts, done, has_terminal, hold_stops, step, stopped},
+        render::{NOTE, paint},
+        terminal::{Interrupts, done, has_terminal, hold_stops, say, step, stopped},
     },
     git2::Repository,
 };
@@ -40,6 +41,11 @@ pub(in crate::cli) fn update(flake: &str, asked: Option<Activation>) -> anyhow::
             workdir,
             &paths,
         );
+        return Ok(ExitCode::FAILURE);
+    }
+
+    let caught_from = repo.head()?.target();
+    if !super::catch_up(&repo, workdir)? {
         return Ok(ExitCode::FAILURE);
     }
 
@@ -76,6 +82,17 @@ pub(in crate::cli) fn update(flake: &str, asked: Option<Activation>) -> anyhow::
     // the tree was clean going in, so a lock file nix left untouched is
     // one it found nothing newer for
     if !repo.status_file(Path::new(FLAKE_LOCK))?.is_wt_modified() {
+        // what the catch up brought in is deployed all the same, as a
+        // switch on the same clean tree would deploy it
+        if repo.head()?.target() != caught_from {
+            say(paint(
+                NOTE,
+                "flake inputs are already current; deploying what was caught up with",
+            ));
+            let host = hostname::get()?.to_string_lossy().into_owned();
+            return super::switch::switch_clean(&repo, workdir, &host, asked);
+        }
+
         done("flake inputs are already current");
 
         return Ok(ExitCode::SUCCESS);
