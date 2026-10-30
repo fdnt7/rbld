@@ -193,7 +193,7 @@ fn compare(replaced: &Generation, new: &Generation, decision: &Decision) -> io::
     step("comparing with the system it replaces");
 
     let diff = Command::new("dix")
-        .args(["--color", "always"])
+        .args(["diff", "--color", "always"])
         .arg(replaced.path())
         .arg(new.path())
         .output()?;
