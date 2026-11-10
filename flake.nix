@@ -53,7 +53,11 @@
             nativeBuildInputs = [
               pkgs.installShellFiles
               pkgs.makeWrapper
+              pkgs.pkg-config
             ];
+            # git2 links nixpkgs' libgit2, found through pkg-config: nixpkgs'
+            # cargo hook no longer lets a crate build the copy it vendors
+            buildInputs = [ pkgs.libgit2 ];
             # the scripts only ask rbld, by this path, to complete what is typed,
             # so they cannot fall behind its commands; written before it is
             # wrapped, and the wrapper takes the same path
