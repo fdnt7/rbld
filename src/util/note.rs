@@ -420,6 +420,20 @@ fn short(repo: &Repository, oid: Oid) -> anyhow::Result<String> {
         .to_owned())
 }
 
+/// whether `remote` is without what `notes_ref` has here, as it is after a
+/// push that failed
+///
+/// Asked of the remote itself rather than of anything kept here: a notes ref
+/// has no remote-tracking ref to compare with, and the one round trip is the
+/// only way to know. A remote that has more than is here differs too, and
+/// [`push`] is what settles that.
+pub fn unpushed(workdir: &str, remote: &str, notes_ref: &str) -> anyhow::Result<bool> {
+    let ours = git(workdir, ["rev-parse", "--verify", notes_ref])?;
+    let theirs = git(workdir, ["ls-remote", remote, notes_ref])?;
+
+    Ok(theirs.split_whitespace().next() != Some(ours.trim()))
+}
+
 /// sends `notes_ref` to `remote`
 ///
 /// The remote takes it as a fast forward, which it ordinarily is. Where it is

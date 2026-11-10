@@ -248,19 +248,46 @@ impl Deployment {
     /// A deployment that activated nothing, of a commit whose note already
     /// names the running generation, is left unwritten: it would only replace
     /// that note, the one saying what the deployment did, with one saying it
-    /// did nothing.
+    /// did nothing. The remote is still kept in step: notes an earlier push
+    /// left behind are sent now, and the closing line says which it was.
     pub fn record(self, repo: &Repository, workdir: &str, commit: Oid) {
         let host = self.host.clone();
+        let notes_ref = note::notes_ref(&host);
 
         if self.activation.is_none() && self.from == Some(commit) {
             let commit = short(repo, commit).unwrap_or_else(|_| commit.to_string());
-            done(&format!(
-                "{host} is already deployed from {commit}; its note stands"
-            ));
+            let stands = format!("{host} is already deployed from {commit}; its note stands");
+
+            // a push that failed said the next deployment would see to it, and
+            // one that finds nothing to deploy is still the next: left to wait
+            // for a commit, the notes stay unseen by every other host
+            let Some(remote) = note::remote(repo) else {
+                done(&stands);
+                return;
+            };
+
+            step(&format!("asking {remote} whether it has {host}'s notes"));
+
+            match note::unpushed(workdir, &remote, &notes_ref) {
+                Ok(false) => done(&stands),
+                Ok(true) => {
+                    step(&format!("pushing the notes {remote} lacks"));
+
+                    match note::push(workdir, &remote, &notes_ref) {
+                        Ok(()) => done(&format!(
+                            "{stands}, and the notes {remote} lacked are pushed"
+                        )),
+                        Err(e) => warn(&format!(
+                            "{stands}, but {remote} lacks notes that were not pushed; the next deployment pushes them: {e:#}"
+                        )),
+                    }
+                }
+                Err(e) => warn(&format!(
+                    "{stands}, but {remote} could not be asked whether it has it: {e:#}"
+                )),
+            }
             return;
         }
-
-        let notes_ref = note::notes_ref(&host);
 
         if let Err(e) = self.write(repo, workdir, &notes_ref, commit) {
             warn(&format!("the deployment was not recorded: {e:#}"));
