@@ -120,9 +120,9 @@ pub(in crate::cli) fn deploy(flake: &str, asked: Option<Activation>) -> anyhow::
     let start = kept.clone().unwrap_or_else(|| placeholder(scope));
     let mut message = None;
     let mut gave_up = None;
-    let outcome = deploy::deploy(&repo, workdir, &host, asked, &mut |diff| {
-        let moved = moves(diff);
-        match message::write(workdir, &start, &moved, "undo the commit", kept.is_some())? {
+    let outcome = deploy::deploy(&repo, workdir, &host, asked, &mut |moved| {
+        let moved = moved.trim();
+        match message::write(workdir, &start, moved, "undo the commit", kept.is_some())? {
             Ok(written) => message = Some(written),
             Err(why) => gave_up = Some(why),
         }
@@ -222,17 +222,6 @@ fn placeholder(scope: &Scope) -> String {
         .map_or_else(|| format!("{PLACEHOLDER}scope"), str::to_owned);
 
     format!("{PLACEHOLDER}type({named}): {PLACEHOLDER}desc\n")
-}
-
-/// what the deployment moves, as the message is written from it, below the
-/// scissors
-fn moves(diff: &str) -> String {
-    let diff = diff.trim();
-    if diff.is_empty() {
-        "nothing is activated: the system already has this generation in place".to_owned()
-    } else {
-        diff.to_owned()
-    }
 }
 
 #[cfg(test)]

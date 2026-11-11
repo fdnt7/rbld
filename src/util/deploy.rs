@@ -67,9 +67,9 @@ pub struct Deployment {
 /// wrong after is said here and the deployment stands.
 ///
 /// `ready` is the caller's last word before anything is activated, given what
-/// moves, which is empty where nothing does: it is asked once the answer is
-/// yes, or once there is found to be nothing to activate, and the deployment
-/// goes no further where it says no.
+/// moves, or where nothing does, the line saying why not: it is asked once the
+/// answer is yes, or once there is found to be nothing to activate, and the
+/// deployment goes no further where it says no.
 pub fn deploy(
     repo: &Repository,
     workdir: &str,
@@ -142,9 +142,10 @@ pub fn deploy(
     };
 
     if new == replaced {
-        note(already(decision.activation));
+        let already = already(decision.activation, &Source::of(repo, from)?);
+        note(&already);
 
-        if !ready("")? {
+        if !ready(&already)? {
             return Ok(Outcome::NotDeployed(NOT_READY));
         }
         return Ok(Outcome::Deployed(deployment(None, String::new())));
@@ -220,16 +221,71 @@ fn compare(replaced: &Generation, new: &Generation, decision: &Decision) -> io::
     Ok(diff)
 }
 
+/// how what is being deployed stands to what the generation in place was
+/// deployed from, which is what tells two ways of having nothing to activate
+/// apart: deploying the same thing again, and deploying changes that come to
+/// nothing on this host
+#[derive(Debug, PartialEq, Eq)]
+enum Source {
+    /// the very tree, whatever commit it is in: a commit given a new message
+    /// is a new commit of the same tree, and the tree is all the flake sees
+    Same,
+    /// another tree than the one in this commit, abbreviated, so what changed
+    /// since is no part of this system
+    Changed(String),
+    /// no telling: no note names the generation in place, or the commit the
+    /// note is on is gone
+    Unknown,
+}
+
+impl Source {
+    /// how what `repo` has checked out stands to `from`, the commit the
+    /// generation in place was deployed from
+    fn of(repo: &Repository, from: Option<Oid>) -> anyhow::Result<Self> {
+        let Some(from) = from.filter(|&from| repo.find_commit(from).is_ok()) else {
+            return Ok(Self::Unknown);
+        };
+
+        Ok(
+            if same_tree(repo, from, repo.head()?.peel_to_commit()?.id()) {
+                Self::Same
+            } else {
+                Self::Changed(short(repo, from)?)
+            },
+        )
+    }
+}
+
+/// whether `a` and `b` are commits of one tree, which is to say of one flake
+/// as nix sees it, whatever their messages and history; not so where either
+/// is gone, there being no telling
+fn same_tree(repo: &Repository, a: Oid, b: Oid) -> bool {
+    let tree = |oid| repo.find_commit(oid).map(|commit| commit.tree_id()).ok();
+
+    a == b || tree(a).is_some_and(|a| Some(a) == tree(b))
+}
+
 /// what is said where the generation is already where `activation` would
 /// leave it: what a boot replaces is the generation set to boot next, which a
 /// deployment before this one may have left there unbooted
-const fn already(activation: Activation) -> &'static str {
-    match activation {
-        Activation::Switch => "the system is already this generation; there is nothing to activate",
-        Activation::Boot => {
-            "the system is already set to boot this generation; there is nothing to activate"
-        }
-    }
+fn already(activation: Activation, source: &Source) -> String {
+    let (is, stands) = match activation {
+        Activation::Switch => ("is running", "already running"),
+        Activation::Boot => ("is set to boot", "already set to boot"),
+    };
+
+    let what = match source {
+        Source::Same => format!("the system was deployed from this very tree, and {is} it"),
+        Source::Changed(from) => format!(
+            "what changed since {from} does not reach this system: it builds the generation {stands}"
+        ),
+        Source::Unknown => match activation {
+            Activation::Switch => "the system is already this generation".to_owned(),
+            Activation::Boot => "the system is already set to boot this generation".to_owned(),
+        },
+    };
+
+    format!("{what}; there is nothing to activate")
 }
 
 fn activate(activation: Activation, generation: &Generation) -> std::io::Result<ExitStatus> {
@@ -245,18 +301,44 @@ impl Deployment {
     /// has moved by now, and a commit undone for want of a note would be the
     /// worse record of it
     ///
-    /// A deployment that activated nothing, of a commit whose note already
-    /// names the running generation, is left unwritten: it would only replace
-    /// that note, the one saying what the deployment did, with one saying it
-    /// did nothing. The remote is still kept in step: notes an earlier push
-    /// left behind are sent now, and the closing line says which it was.
+    /// A deployment that activated nothing, of the tree a note already names
+    /// the running generation for, is left unwritten: on the same commit it
+    /// would only replace that note, the one saying what the deployment did,
+    /// with one saying it did nothing, and on another commit of that tree it
+    /// would say changes came to nothing where there were none. There the
+    /// note is carried to the commit instead, as it is on a reword. The remote
+    /// is still kept in step: a note carried, and notes an earlier push left
+    /// behind, are sent now, and the closing line says which it was.
     pub fn record(self, repo: &Repository, workdir: &str, commit: Oid) {
         let host = self.host.clone();
         let notes_ref = note::notes_ref(&host);
 
-        if self.activation.is_none() && self.from == Some(commit) {
-            let commit = short(repo, commit).unwrap_or_else(|_| commit.to_string());
-            let stands = format!("{host} is already deployed from {commit}; its note stands");
+        if self.activation.is_none()
+            && let Some(from) = self.from.filter(|&from| same_tree(repo, from, commit))
+        {
+            let short = |oid: Oid| short(repo, oid).unwrap_or_else(|_| oid.to_string());
+            let stands = if from == commit {
+                format!(
+                    "{host} is already deployed from {}; its note stands",
+                    short(commit)
+                )
+            } else {
+                // the note goes with the tree, as it does on a reword, so that
+                // the commit checked out is the one the deployment is told by
+                let (from_id, commit_id) = (from, commit);
+                let (from, commit) = (short(from), short(commit));
+                let already =
+                    format!("{host} is already deployed from {from}, of the same tree as {commit}");
+
+                match note::carry(repo, workdir, &notes_ref, from_id, commit_id) {
+                    Ok(true) => format!("{already}; its note is carried to {commit}"),
+                    Ok(false) => format!("{already}; its note stays on {from}"),
+                    Err(e) => {
+                        warn(&format!("the note was not carried to {commit}: {e:#}"));
+                        format!("{already}; its note stays on {from}")
+                    }
+                }
+            };
 
             // a push that failed said the next deployment would see to it, and
             // one that finds nothing to deploy is still the next: left to wait
@@ -370,4 +452,105 @@ fn short(repo: &Repository, oid: Oid) -> anyhow::Result<String> {
         .as_str()
         .unwrap_or_default()
         .to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    /// a repository in `dir` with one commit, of a file saying `text`
+    fn repo(dir: &Path, text: &str) -> (Repository, Oid) {
+        let repo = Repository::init(dir).expect("repo");
+        let first = commit(&repo, text, &[]);
+        (repo, first)
+    }
+
+    /// commits a file saying `text` on top of `parents`, moving head to it
+    fn commit(repo: &Repository, text: &str, parents: &[Oid]) -> Oid {
+        let workdir = repo.workdir().expect("workdir");
+        std::fs::write(workdir.join("flake.nix"), text).expect("file");
+
+        let mut index = repo.index().expect("index");
+        index.add_path(Path::new("flake.nix")).expect("add");
+        let tree = repo
+            .find_tree(index.write_tree().expect("tree"))
+            .expect("tree");
+        let signature = git2::Signature::now("rbld", "rbld@localhost").expect("signature");
+        let parents: Vec<_> = parents
+            .iter()
+            .map(|&parent| repo.find_commit(parent).expect("parent"))
+            .collect();
+
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            text,
+            &tree,
+            &parents.iter().collect::<Vec<_>>(),
+        )
+        .expect("commit")
+    }
+
+    #[test]
+    fn the_commit_deployed_from_is_the_same_source() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let (repo, first) = repo(tmp.path(), "a");
+
+        assert_eq!(Source::of(&repo, Some(first)).ok(), Some(Source::Same));
+    }
+
+    #[test]
+    fn another_commit_of_the_same_tree_is_the_same_source() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let (repo, first) = repo(tmp.path(), "a");
+        let changed = commit(&repo, "b", &[first]);
+        let back = commit(&repo, "a", &[changed]);
+
+        assert_ne!(first, back);
+        assert_eq!(Source::of(&repo, Some(first)).ok(), Some(Source::Same));
+        assert!(same_tree(&repo, first, back));
+        assert!(!same_tree(&repo, first, changed));
+    }
+
+    #[test]
+    fn another_tree_is_a_changed_source_named_by_where_it_changed_from() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let (repo, first) = repo(tmp.path(), "a");
+        commit(&repo, "b", &[first]);
+
+        let from = short(&repo, first).expect("short");
+        assert_eq!(
+            Source::of(&repo, Some(first)).ok(),
+            Some(Source::Changed(from))
+        );
+    }
+
+    #[test]
+    fn no_commit_to_go_by_is_an_unknown_source() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let (repo, _) = repo(tmp.path(), "a");
+        let gone = Oid::from_str("1234567890123456789012345678901234567890").expect("oid");
+
+        assert_eq!(Source::of(&repo, None).ok(), Some(Source::Unknown));
+        assert_eq!(Source::of(&repo, Some(gone)).ok(), Some(Source::Unknown));
+    }
+
+    #[test]
+    fn nothing_to_activate_says_which_way() {
+        assert_eq!(
+            already(Activation::Switch, &Source::Same),
+            "the system was deployed from this very tree, and is running it; there is nothing to activate"
+        );
+        assert_eq!(
+            already(Activation::Boot, &Source::Changed("1f9d10e".to_owned())),
+            "what changed since 1f9d10e does not reach this system: it builds the generation already set to boot; there is nothing to activate"
+        );
+        assert_eq!(
+            already(Activation::Switch, &Source::Unknown),
+            "the system is already this generation; there is nothing to activate"
+        );
+    }
 }
