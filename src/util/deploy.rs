@@ -15,7 +15,7 @@ use {
         generation::{Activation, Decision, Generation},
         note::{self, Note},
         render::{NOTE, paint},
-        terminal::{ask, done, note, say, step, told_to_stop, warn},
+        terminal::{ask, done, note, quiet_step, say, step, told_to_stop, warn},
         units::Watched,
     },
     anstream::adapter::strip_str,
@@ -114,7 +114,7 @@ pub fn deploy(
     if let Some(remote) = note::remote(repo)
         && repo.refname_to_id(&notes_ref).is_err()
     {
-        step(&format!("fetching the notes of {host} from {remote}"));
+        quiet_step(&format!("fetching the notes of {host} from {remote}"));
 
         if let Err(e) = note::adopt(repo, workdir, &remote, &notes_ref) {
             warn(&format!("the notes were not fetched: {e:#}"));
@@ -142,8 +142,15 @@ pub fn deploy(
     };
 
     if new == replaced {
-        let already = already(decision.activation, &Source::of(repo, from)?);
-        note(&already);
+        let source = Source::of(repo, from)?;
+        let already = already(decision.activation, &source);
+
+        // the same thing deployed again is all the closing line has to say,
+        // and is left to it; changes that came to nothing are news, said here
+        // where the question would have been
+        if source != Source::Same {
+            note(&already);
+        }
 
         if !ready(&already)? {
             return Ok(Outcome::NotDeployed(NOT_READY));
@@ -295,6 +302,18 @@ fn activate(activation: Activation, generation: &Generation) -> std::io::Result<
         .status()
 }
 
+/// the closing line of a deployment that had nothing to deploy, `what` being
+/// what `host` already has where `decided` would have put it: tersely, as
+/// git says there is nothing to commit, there being nothing more to it
+fn nothing_to_deploy(host: &str, decided: Activation, what: &str) -> String {
+    let has = match decided {
+        Activation::Switch => "already runs",
+        Activation::Boot => "is already set to boot",
+    };
+
+    format!("nothing to deploy; {host} {has} {what}")
+}
+
 impl Deployment {
     /// writes the note for this deployment on `commit`, and keeps the remote
     /// in step, saying rather than failing where either goes wrong: the system
@@ -318,24 +337,21 @@ impl Deployment {
         {
             let short = |oid: Oid| short(repo, oid).unwrap_or_else(|_| oid.to_string());
             let stands = if from == commit {
-                format!(
-                    "{host} is already deployed from {}; its note stands",
-                    short(commit)
-                )
+                nothing_to_deploy(&host, self.decided, &short(commit))
             } else {
                 // the note goes with the tree, as it does on a reword, so that
                 // the commit checked out is the one the deployment is told by
-                let (from_id, commit_id) = (from, commit);
-                let (from, commit) = (short(from), short(commit));
-                let already =
-                    format!("{host} is already deployed from {from}, of the same tree as {commit}");
+                let stands = nothing_to_deploy(&host, self.decided, "this tree");
 
-                match note::carry(repo, workdir, &notes_ref, from_id, commit_id) {
-                    Ok(true) => format!("{already}; its note is carried to {commit}"),
-                    Ok(false) => format!("{already}; its note stays on {from}"),
+                match note::carry(repo, workdir, &notes_ref, from, commit) {
+                    Ok(true) => format!("{stands}, and its note is carried to {}", short(commit)),
+                    Ok(false) => format!("{stands}, as {}", short(from)),
                     Err(e) => {
-                        warn(&format!("the note was not carried to {commit}: {e:#}"));
-                        format!("{already}; its note stays on {from}")
+                        warn(&format!(
+                            "the note was not carried to {}: {e:#}",
+                            short(commit)
+                        ));
+                        format!("{stands}, as {}", short(from))
                     }
                 }
             };
@@ -348,12 +364,12 @@ impl Deployment {
                 return;
             };
 
-            step(&format!("asking {remote} whether it has {host}'s notes"));
+            quiet_step(&format!("asking {remote} whether it has {host}'s notes"));
 
             match note::unpushed(workdir, &remote, &notes_ref) {
                 Ok(false) => done(&stands),
                 Ok(true) => {
-                    step(&format!("pushing the notes {remote} lacks"));
+                    quiet_step(&format!("pushing the notes {remote} lacks"));
 
                     match note::push(workdir, &remote, &notes_ref) {
                         Ok(()) => done(&format!(
@@ -371,21 +387,29 @@ impl Deployment {
             return;
         }
 
+        // a note saying nothing was activated is a record all the same, of
+        // changes that came to nothing here, but no deployment to speak of
+        let recorded = if self.activation.is_some() {
+            format!("deployed and recorded on {host}")
+        } else {
+            format!("nothing to activate; recorded on {host}")
+        };
+
         if let Err(e) = self.write(repo, workdir, &notes_ref, commit) {
             warn(&format!("the deployment was not recorded: {e:#}"));
             return;
         }
 
         match note::remote(repo) {
-            None => done(&format!("deployed and recorded on {host}")),
+            None => done(&recorded),
             Some(remote) => {
                 // a round trip to the remote, which takes as long as it takes
-                step(&format!("pushing the note to {remote}"));
+                quiet_step(&format!("pushing the note to {remote}"));
 
                 match note::push(workdir, &remote, &notes_ref) {
-                    Ok(()) => done(&format!("deployed and recorded on {host}")),
+                    Ok(()) => done(&recorded),
                     Err(e) => warn(&format!(
-                        "deployed and recorded on {host}, but not pushed; the next deployment pushes it: {e:#}"
+                        "{recorded}, but not pushed; the next deployment pushes it: {e:#}"
                     )),
                 }
             }
@@ -551,6 +575,18 @@ mod tests {
         assert_eq!(
             already(Activation::Switch, &Source::Unknown),
             "the system is already this generation; there is nothing to activate"
+        );
+    }
+
+    #[test]
+    fn nothing_to_deploy_says_where_it_already_stands() {
+        assert_eq!(
+            nothing_to_deploy("fw16", Activation::Switch, "c47f33c"),
+            "nothing to deploy; fw16 already runs c47f33c"
+        );
+        assert_eq!(
+            nothing_to_deploy("fw16", Activation::Boot, "this tree"),
+            "nothing to deploy; fw16 is already set to boot this tree"
         );
     }
 }

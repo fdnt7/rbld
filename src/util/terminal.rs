@@ -6,7 +6,7 @@ use std::{
     io::{IsTerminal, Read, Write},
     sync::{
         Arc, LazyLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
 };
 
@@ -74,14 +74,23 @@ pub fn has_terminal() -> bool {
     false
 }
 
-/// whether anything of ours has been said yet, and so whether a label has
-/// anything above it to be set apart from at all
+/// what stands above the line about to be said, and so whether a label has
+/// anything to be set apart from: one of [`NOTHING`], [`QUIET_STEP`] and
+/// [`SOMETHING`]
 ///
 /// the programs rbld runs are handed our own streams, so what they say is said
-/// where there is nothing of ours to count it. What is counted instead is only
-/// whether the run has opened its mouth yet, which is the one thing that can
-/// be known of every program alike.
-static ANNOUNCED: AtomicBool = AtomicBool::new(false);
+/// where there is nothing of ours to count it. What is kept instead is what
+/// was last said here, and whether it left the terminal to a program that may
+/// have spoken since, which is all that can be known of every program alike.
+static ABOVE: AtomicU8 = AtomicU8::new(NOTHING);
+
+/// the run has not opened its mouth yet
+const NOTHING: u8 = 0;
+/// a [`quiet_step`], and not a word since
+const QUIET_STEP: u8 = 1;
+/// anything else, a step that gave the terminal away among it, after which
+/// there is no telling
+const SOMETHING: u8 = 2;
 
 /// names, on a line of its own, the program about to be given the terminal
 ///
@@ -101,7 +110,23 @@ static ANNOUNCED: AtomicBool = AtomicBool::new(false);
 /// is block buffered the moment it is redirected, and a heading delivered in a
 /// batch of its own after the fact heads nothing.
 pub fn step(message: &str) {
-    say(format_args!("{}{}", gap(), labelled(STEP, "step", message)));
+    say(format_args!(
+        "{}{}",
+        step_gap(),
+        labelled(STEP, "step", message)
+    ));
+}
+
+/// names a step that gives the terminal to nobody: what its program says is
+/// read here and not shown, so nothing comes under it but what rbld says of
+/// it, which is often nothing
+///
+/// a step with nothing under it has nothing to be set apart from the next by,
+/// and a run of them reads as the list it is. So the step after this one
+/// comes on the line below, where nothing was said in between.
+pub fn quiet_step(message: &str) {
+    step(message);
+    ABOVE.store(QUIET_STEP, Ordering::Relaxed);
 }
 
 /// closes the command, saying what it got done
@@ -164,15 +189,24 @@ pub fn stopped(headline: &str, note: &str) {
 /// back what the run wrote, which matters more than telling nobody about it.
 pub fn say(text: impl Display) {
     let _ = writeln!(anstream::stderr(), "{text}");
+    ABOVE.store(SOMETHING, Ordering::Relaxed);
 }
 
 /// the blank line that sets a label apart from what is above it, where
 /// anything is; the first has nothing to be set apart from
 fn gap() -> &'static str {
-    if ANNOUNCED.swap(true, Ordering::Relaxed) {
-        "\n"
-    } else {
-        ""
+    match ABOVE.swap(SOMETHING, Ordering::Relaxed) {
+        NOTHING => "",
+        _ => "\n",
+    }
+}
+
+/// the blank line above a step, which one coming straight after a
+/// [`quiet_step`] does without, as the first line does
+fn step_gap() -> &'static str {
+    match ABOVE.swap(SOMETHING, Ordering::Relaxed) {
+        SOMETHING => "\n",
+        _ => "",
     }
 }
 

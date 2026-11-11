@@ -4,7 +4,7 @@ use {
     crate::util::{
         git, message, note,
         render::{HEADLINE, NOTE, paint},
-        terminal::{Interrupts, done, has_terminal, hold_stops, refuse, step, stopped, warn},
+        terminal::{Interrupts, done, has_terminal, hold_stops, quiet_step, refuse, stopped, warn},
     },
     git2::Repository,
 };
@@ -75,7 +75,7 @@ pub(in crate::cli) fn reword(flake: &str) -> anyhow::Result<ExitCode> {
         Ok(true) => match note::remote(&repo) {
             None => done(&format!("reworded, with {host}'s note carried to it")),
             Some(remote) => {
-                step(&format!("pushing the note to {remote}"));
+                quiet_step(&format!("pushing the note to {remote}"));
                 match note::push(workdir, &remote, &notes_ref) {
                     Ok(()) => done(&format!("reworded, with {host}'s note carried to it")),
                     Err(e) => warn(&format!(

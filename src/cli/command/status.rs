@@ -7,7 +7,7 @@ use {
         git,
         note::{self, Record},
         render::{NOTE, headed, paint},
-        terminal::{note, step, warn},
+        terminal::{note, quiet_step, warn},
     },
     chrono::{DateTime, FixedOffset, Local, TimeDelta},
     git2::{Oid, Repository},
@@ -27,7 +27,7 @@ pub(in crate::cli) fn status(flake: &str) -> anyhow::Result<ExitCode> {
     let this = hostname::get()?.to_string_lossy().into_owned();
 
     if let Some(remote) = note::remote(&repo) {
-        step(&format!("fetching the notes from {remote}"));
+        quiet_step(&format!("fetching the notes from {remote}"));
 
         match note::fetch_all(&repo, workdir, &remote) {
             Ok(kept) => {

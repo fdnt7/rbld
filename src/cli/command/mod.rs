@@ -12,7 +12,7 @@ use {
         git::{self, CaughtUp},
         render::{DISALLOWED, HEADLINE, NOTE, file_path, headed, paint, rooted},
         scope::Scope,
-        terminal::{key, note, refuse, refuse_because, say, step, stopped, warn},
+        terminal::{key, note, quiet_step, refuse, refuse_because, say, stopped, warn},
     },
     anstyle::Style,
     git2::{Oid, Repository},
@@ -103,7 +103,7 @@ fn refuse_split(headline: &str, workdir: &str, scopes: &BTreeMap<Scope, Vec<Stri
 fn catch_up(repo: &Repository, workdir: &str, host: &str) -> anyhow::Result<bool> {
     // a retry fetches again from the top, nothing having been done yet
     loop {
-        step("catching up with the remote");
+        quiet_step("catching up with the remote");
 
         match git::catch_up(repo, workdir)? {
             CaughtUp::Current => {}

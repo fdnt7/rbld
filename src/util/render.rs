@@ -63,7 +63,10 @@ pub fn paint(style: Style, text: &str) -> String {
 /// - The label says what kind of line it is. `step`, `done`, `warning`,
 ///   `error` and `fatal` are the turning points of a run, each set apart by a
 ///   blank line above it; `note` is rbld saying something within a step, or
-///   after an `error`, what became of the work, and has none.
+///   after an `error`, what became of the work, and has none. Neither has a
+///   `step` that comes straight after one with nothing under it: a blank
+///   line sets a step apart from what the one before it left on the
+///   terminal, and where that is nothing, the two read as the list they are.
 /// - How much the line matters is the message's styling, the label keeping
 ///   its colour: bold for a verdict, plain for what the reader needs for what
 ///   follows, dimmed for an aside.
