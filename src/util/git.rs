@@ -426,7 +426,15 @@ pub enum CaughtUp {
 /// fetch that fails is handed back rather than an error, for the caller to
 /// ask about: a configuration that broke the network has to be deployable
 /// without one.
-pub fn catch_up(repo: &Repository, workdir: &str) -> anyhow::Result<CaughtUp> {
+///
+/// `also` is a refspec to fetch along with the remote's own, given the remote:
+/// what else the caller wants of it while it is being asked anyway, a fetch
+/// being a round trip however much it brings.
+pub fn catch_up(
+    repo: &Repository,
+    workdir: &str,
+    also: &dyn Fn(&str) -> String,
+) -> anyhow::Result<CaughtUp> {
     let head = repo.head()?;
     let Some(branch) = head.name().ok().filter(|_| head.is_branch()) else {
         return Ok(CaughtUp::Current);
@@ -444,6 +452,10 @@ pub fn catch_up(repo: &Repository, workdir: &str) -> anyhow::Result<CaughtUp> {
         Command::new("git")
             .arg("-C")
             .arg(workdir)
+            // one more value for the remote's refspecs, beside the ones it is
+            // set up with, which naming a refspec to fetch would replace
+            .arg("-c")
+            .arg(format!("remote.{remote}.fetch={}", also(&remote)))
             .args(["fetch", "--quiet", &remote])
             .output()?
     };

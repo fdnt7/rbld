@@ -358,30 +358,24 @@ impl Deployment {
 
             // a push that failed said the next deployment would see to it, and
             // one that finds nothing to deploy is still the next: left to wait
-            // for a commit, the notes stay unseen by every other host
-            let Some(remote) = note::remote(repo) else {
+            // for a commit, the notes stay unseen by every other host. What the
+            // remote has was seen on catching up with it, so nothing is asked
+            // of it here, and nothing said where it lacks nothing
+            let Some(remote) =
+                note::remote(repo).filter(|remote| note::unpushed(repo, remote, &notes_ref))
+            else {
                 done(&stands);
                 return;
             };
 
-            quiet_step(&format!("asking {remote} whether it has {host}'s notes"));
+            quiet_step(&format!("pushing the notes {remote} lacks"));
 
-            match note::unpushed(workdir, &remote, &notes_ref) {
-                Ok(false) => done(&stands),
-                Ok(true) => {
-                    quiet_step(&format!("pushing the notes {remote} lacks"));
-
-                    match note::push(workdir, &remote, &notes_ref) {
-                        Ok(()) => done(&format!(
-                            "{stands}, and the notes {remote} lacked are pushed"
-                        )),
-                        Err(e) => warn(&format!(
-                            "{stands}, but {remote} lacks notes that were not pushed; the next deployment pushes them: {e:#}"
-                        )),
-                    }
-                }
+            match note::push(workdir, &remote, &notes_ref) {
+                Ok(()) => done(&format!(
+                    "{stands}, and the notes {remote} lacked are pushed"
+                )),
                 Err(e) => warn(&format!(
-                    "{stands}, but {remote} could not be asked whether it has it: {e:#}"
+                    "{stands}, but {remote} lacks notes that were not pushed; the next deployment pushes them: {e:#}"
                 )),
             }
             return;

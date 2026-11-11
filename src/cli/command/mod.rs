@@ -105,7 +105,7 @@ fn catch_up(repo: &Repository, workdir: &str, host: &str) -> anyhow::Result<bool
     loop {
         quiet_step("catching up with the remote");
 
-        match git::catch_up(repo, workdir)? {
+        match git::catch_up(repo, workdir, &crate::util::note::seen_refspec)? {
             CaughtUp::Current => {}
             // a note, but not dimmed as an aside: what is built and compared below
             // is what came in as well as anything here, and a comparison holding

@@ -34,6 +34,10 @@ const NOTES_REF_PREFIX: &str = "refs/notes/rebuild";
 /// where it would pass for a host
 const INCOMING: &str = "refs/notes/rbld-incoming";
 
+/// where what each remote was last seen to have of the notes is kept, one
+/// under it per remote and host
+const SEEN_REF_PREFIX: &str = "refs/rbld/notes";
+
 /// the host's own notes ref
 pub fn notes_ref(host: &str) -> String {
     format!("{NOTES_REF_PREFIX}/{host}")
@@ -420,21 +424,45 @@ fn short(repo: &Repository, oid: Oid) -> anyhow::Result<String> {
         .to_owned())
 }
 
-/// whether `remote` is without what `notes_ref` has here, as it is after a
-/// push that failed
+/// the refspec that has a fetch from `remote` bring every host's notes along
+/// as it last had them, each to the ref [`seen_ref`] names
 ///
-/// Asked of the remote itself rather than of anything kept here: a notes ref
-/// has no remote-tracking ref to compare with, and the one round trip is the
-/// only way to know. A remote that has more than is here differs too, and
-/// [`push`] is what settles that.
-pub fn unpushed(workdir: &str, remote: &str, notes_ref: &str) -> anyhow::Result<bool> {
-    let ours = git(workdir, ["rev-parse", "--verify", notes_ref])?;
-    let theirs = git(workdir, ["ls-remote", remote, notes_ref])?;
-
-    Ok(theirs.split_whitespace().next() != Some(ours.trim()))
+/// A notes ref has no remote-tracking ref of git's making, so this is ours,
+/// kept outside `refs/notes` where it would pass for notes to show. It is
+/// forced, being a view of the remote's and nothing to keep.
+pub fn seen_refspec(remote: &str) -> String {
+    format!("+{NOTES_REF_PREFIX}/*:{SEEN_REF_PREFIX}/{remote}/*")
 }
 
-/// sends `notes_ref` to `remote`
+/// where what `remote` was last seen to have of `notes_ref` is kept
+fn seen_ref(remote: &str, notes_ref: &str) -> String {
+    let host = notes_ref
+        .strip_prefix(NOTES_REF_PREFIX)
+        .unwrap_or(notes_ref)
+        .trim_start_matches('/');
+
+    format!("{SEEN_REF_PREFIX}/{remote}/{host}")
+}
+
+/// whether `remote` is without what `notes_ref` has here, as it is after a
+/// push that failed, going by what it was last seen to have
+///
+/// Nothing is asked of the remote: the fetch a deployment opens on brings its
+/// notes along, under [`seen_refspec`], and a push that goes through leaves
+/// what was pushed as what was seen. Where the fetch did not go through, what
+/// was seen is older than what the remote has, which is only ever to push for
+/// nothing or to leave it to the next deployment. A remote that has more than
+/// is here differs too, and [`push`] is what settles that.
+pub fn unpushed(repo: &Repository, remote: &str, notes_ref: &str) -> bool {
+    let Ok(ours) = repo.refname_to_id(notes_ref) else {
+        return false;
+    };
+
+    repo.refname_to_id(&seen_ref(remote, notes_ref)).ok() != Some(ours)
+}
+
+/// sends `notes_ref` to `remote`, and keeps what was sent as what the remote
+/// was last seen to have
 ///
 /// The remote takes it as a fast forward, which it ordinarily is. Where it is
 /// not, the remote has notes this clone never saw, written from another clone
@@ -442,6 +470,21 @@ pub fn unpushed(workdir: &str, remote: &str, notes_ref: &str) -> anyhow::Result<
 /// commit both have a note on, being the deployment just made, and the push
 /// tried again.
 pub fn push(workdir: &str, remote: &str, notes_ref: &str) -> anyhow::Result<()> {
+    send(workdir, remote, notes_ref)?;
+
+    // what was seen is only ever a saving of a round trip, and a push that
+    // went through is not undone for want of it
+    if let Ok(tip) = git(workdir, ["rev-parse", "--verify", notes_ref]) {
+        let _ = git(
+            workdir,
+            ["update-ref", &seen_ref(remote, notes_ref), tip.trim()],
+        );
+    }
+
+    Ok(())
+}
+
+fn send(workdir: &str, remote: &str, notes_ref: &str) -> anyhow::Result<()> {
     let Err(rejected) = git(workdir, ["push", "--quiet", remote, notes_ref]) else {
         return Ok(());
     };
@@ -703,5 +746,48 @@ mod tests {
             trailers("subject\n\nHost: fw16\nnot a trailer"),
             Vec::<(&str, &str)>::new()
         );
+    }
+
+    #[test]
+    fn what_a_remote_was_seen_to_have_is_kept_by_remote_and_host() {
+        assert_eq!(
+            seen_refspec("origin"),
+            "+refs/notes/rebuild/*:refs/rbld/notes/origin/*"
+        );
+        assert_eq!(
+            seen_ref("origin", &notes_ref("fw16")),
+            "refs/rbld/notes/origin/fw16"
+        );
+    }
+
+    #[test]
+    fn notes_are_unpushed_where_the_remote_was_not_seen_to_have_them() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let repo = Repository::init(tmp.path()).expect("repo");
+        let signature = git2::Signature::now("rbld", "rbld@localhost").expect("signature");
+        let tree = repo
+            .find_tree(repo.index().expect("index").write_tree().expect("tree"))
+            .expect("tree");
+        let commit = |message| {
+            repo.commit(None, &signature, &signature, message, &tree, &[])
+                .expect("commit")
+        };
+        let (old, new) = (commit("old"), commit("new"));
+        let notes_ref = notes_ref("fw16");
+        let seen = seen_ref("origin", &notes_ref);
+
+        // no notes here is nothing to push, whatever the remote has
+        assert!(!unpushed(&repo, "origin", &notes_ref));
+        repo.reference(&seen, old, true, "seen").expect("seen");
+        assert!(!unpushed(&repo, "origin", &notes_ref));
+
+        // the same on both sides
+        repo.reference(&notes_ref, old, true, "ours").expect("ours");
+        assert!(!unpushed(&repo, "origin", &notes_ref));
+
+        // more here than was seen there, and another remote never seen at all
+        repo.reference(&notes_ref, new, true, "ours").expect("ours");
+        assert!(unpushed(&repo, "origin", &notes_ref));
+        assert!(unpushed(&repo, "elsewhere", &notes_ref));
     }
 }
